@@ -1,18 +1,18 @@
-"""텔레그램 상태 보드: ReplyKeyboard(입력창 아래 영구 버튼).
+"""텔레그램 상태 보드: 상단 핀(본문) + 입력창 아래 버튼(ReplyKeyboard).
 
-출력(버튼): 1️⃣.⭕ 2️⃣.❌ 3️⃣.📝 4️⃣.❌ 5️⃣.❌ 6️⃣.❌  (3열 그리드)
-상태: ⏳ 선택대기(pending) / 📝 작업중(busy) / ⭕ 연결(idle) / ❌ 종료(빈 슬롯)
+★ 본문·버튼 분리 (2026-07-03): reply_markup(ReplyKeyboard) 포함 메시지는
+  editMessageText 로 edit 불가("can't be edited" 400, Telegram 제약).
+  → 상태 텍스트(markup 없음) 메시지 + 버튼(ReplyKeyboard) 메시지 분리.
 
-ReplyKeyboard 특징:
-  - 입력창 아래 상시(스크롤에 안 묻힘). 핀 아님.
-  - 버튼 클릭 = 버튼 텍스트("1️⃣⭕")가 메시지로 전송(callback 아님).
-  - router가 선두 번호이모지 파싱 → 본문(상태마크만)이면 상태 회신,
-    본문 있으면 주입.
-  - 상태 변 시 editMessageReplyMarkup 로 키보드만 갱신(text 고정, API 절약).
+구성:
+  1. status_msg (상단 핀 고정): 본문 = 상태 마크. markup 없음 → editMessageText 실시간 갱신.
+  2. keyboard_msg (ReplyKeyboard): 번호만 버튼(1️⃣..6️⃣, 상태마크 없음) → 고정. edit 불필요.
+
+마크(본문): ⏳ 선택대기(pending) / 📝 작업중(busy) / ⭕ 연결(idle) / ❌ 종료(빈 슬롯)
+버튼 클릭 = 번호이모지 메시지 전송 → router 가 선두 번호 파싱 → 본문 없으면 선택대기 등록.
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,25 +33,25 @@ class PinBoard:
         self.reg = reg
         self.chat = chat_id
         self.max_slots = max_slots
-        self.id_file = Path(data_dir) / "pin_message_id.txt"
-        self.msg_id = self._load_id()
-        # 저장된 핀 msg_id 가 있어도 _last_key=None → 첫 refresh_if_changed 가
-        # 무조건 edit 시도. router 재시작 시 핀 메시지가 옛날 상태로 고정되는
-        # 버그 방지(registry active 는 안정이라 key 같으면 edit 스킵 → 핀 방치).
-        # edit_message_text 가 400 "not modified" 를 잡으므로 불필요 edit도 안전.
-        self._last_key: tuple | None = None
+        self.data_dir = Path(data_dir)
+        self.status_id_file = self.data_dir / "pin_message_id.txt"        # 본문(=구 핀 id)
+        self.keyboard_id_file = self.data_dir / "keyboard_message_id.txt"
+        self.status_id = self._load_id(self.status_id_file)
+        self.keyboard_id = self._load_id(self.keyboard_id_file)
+        # _last_text=None → 첫 refresh 무조건 edit(옛날 상태 동기화).
+        self._last_text: str | None = None
         # 선택대기(pending) 번호: 해당 슬롯 마크 ⏳ 로 표시. None=대기 없음.
         self.pending_num: int | None = None
 
-    def _load_id(self) -> int | None:
+    def _load_id(self, f: Path) -> int | None:
         try:
-            return int(self.id_file.read_text(encoding="utf-8").strip() or "0") or None
+            return int(f.read_text(encoding="utf-8").strip() or "0") or None
         except Exception:
             return None
 
-    def _save_id(self, mid: int) -> None:
-        self.id_file.parent.mkdir(parents=True, exist_ok=True)
-        self.id_file.write_text(str(mid), encoding="utf-8")
+    def _save_id(self, f: Path, mid: int) -> None:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(str(mid), encoding="utf-8")
 
     def _mark_for(self, info, num: int) -> str:
         """슬롯 마크 우선순위: ⏳ 선택대기 > 📝 작업중 > ⭕ 연결 > ❌ 종료."""
@@ -71,13 +71,12 @@ class PinBoard:
             parts.append(f"{emoji}.{self._mark_for(act.get(n), n)}")
         return "  ".join(parts)
 
-    def status_markup(self) -> dict:
-        """ReplyKeyboard: COLS열 그리드. 버튼=번호+상태. 클릭→텍스트 전송."""
-        act = {i.number: i for i in self.reg.active()}
+    def keyboard_markup(self) -> dict:
+        """ReplyKeyboard: 번호만 버튼(상태마크 없음 → 고정). 클릭=번호 메시지 전송."""
         rows, row = [], []
         for n in range(1, self.max_slots + 1):
             emoji = NUM_EMOJI.get(n, f"{n}")
-            row.append({"text": f"{emoji}.{self._mark_for(act.get(n), n)}"})
+            row.append({"text": emoji})
             if len(row) >= COLS:
                 rows.append(row)
                 row = []
@@ -85,44 +84,45 @@ class PinBoard:
             rows.append(row)
         return {"keyboard": rows, "resize_keyboard": True}
 
-    def _key(self, text: str, markup: dict) -> tuple:
-        return (text, json.dumps(markup, ensure_ascii=False, sort_keys=True))
-
     def create(self) -> None:
+        """본문(상태, markup 없음→edit 가능) + 버튼(ReplyKeyboard) 메시지 생성."""
         if not self.chat:
             return
-        text = self.status_text()
-        markup = self.status_markup()
-        mid = self.tg.send(self.chat, text, reply_markup=markup)
-        if mid:
-            self.msg_id = mid
-            self._last_key = self._key(text, markup)
-            self._save_id(mid)
-            self.tg.pin_chat_message(self.chat, mid)   # 상단 핀 고정
+        # 1) 상태 본문 (markup 없음 → editMessageText 갱신 가능)
+        sid = self.tg.send(self.chat, self.status_text())
+        if sid:
+            self.status_id = sid
+            self._last_text = self.status_text()
+            self._save_id(self.status_id_file, sid)
+            self.tg.pin_chat_message(self.chat, sid)
+        # 2) 버튼 (ReplyKeyboard, 번호만 고정)
+        kid = self.tg.send(self.chat, "터미널 선택", reply_markup=self.keyboard_markup())
+        if kid:
+            self.keyboard_id = kid
+            self._save_id(self.keyboard_id_file, kid)
 
     def refresh_if_changed(self, pending_num: int | None = None) -> None:
-        if not self.msg_id:
+        if not self.status_id:
             return
         self.pending_num = pending_num   # 선택대기 번호 반영(⏳)
         text = self.status_text()
-        markup = self.status_markup()
-        key = self._key(text, markup)
-        if key != self._last_key:
-            # 핀 메시지 본문(text) + 키보드(markup) 둘 다 실시간 갱신.
-            # edit 실패(can't be edited/not found = 핀 무효·삭제됨) → 자동 repin.
+        if text != self._last_text:
+            # 본문만 editMessageText(markup 없음 → edit 가능). 활성 키보드는 유지.
             try:
-                self.tg.edit_message_text(self.chat, self.msg_id, text, reply_markup=markup)
-                self._last_key = key
+                self.tg.edit_message_text(self.chat, self.status_id, text)
+                self._last_text = text
             except Exception:
-                self.repin()   # 새 핀 생성(새 msg_id). _last_key는 repin이 갱신.
+                self.repin()   # 본문 무효(삭제) → 전체 재생성
 
     def repin(self) -> None:
-        """기존 보드 메시지 삭제 후 새로 생성(포맷/버전 변경 시 교체용)."""
-        if self.msg_id:
-            try:
-                self.tg.delete_message(self.chat, self.msg_id)
-            except Exception:
-                pass
-        self.msg_id = None
-        self._last_key = None
+        """기존 본문+버튼 메시지 삭제 후 새로 생성(포맷 변경/무효 시)."""
+        for mid in (self.status_id, self.keyboard_id):
+            if mid:
+                try:
+                    self.tg.delete_message(self.chat, mid)
+                except Exception:
+                    pass
+        self.status_id = None
+        self.keyboard_id = None
+        self._last_text = None
         self.create()

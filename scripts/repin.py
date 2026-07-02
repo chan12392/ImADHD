@@ -1,4 +1,6 @@
-"""기존 핀 삭제 → 버튼핀 재생성. 포맷/버전 교체 시 사용.
+"""기존 핀(본문+버튼) 삭제 → 재생성. 포맷/버전 교체 시 사용.
+
+본문·버튼 분리 구조: status_id(본문=구 핀) + keyboard_id(ReplyKeyboard).
 
 사용: python -m scripts.repin  (cwd=ImADHD)
 """
@@ -24,11 +26,11 @@ def main() -> int:
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
     board = PinBoard(tg, reg, s.allowed_chat_id, s.data_dir, s.max_slots)
-    print("old msg_id:", board.msg_id)
+    print(f"old status_id={board.status_id} keyboard_id={board.keyboard_id}")
     print("status_text:", board.status_text())
     board.repin()
-    print("new msg_id:", board.msg_id)
-    print("OK 버튼핀 재생성 완료")
+    print(f"new status_id={board.status_id} keyboard_id={board.keyboard_id}")
+    print("OK 핀(본문+버튼) 재생성 완료")
     return 0
 
 

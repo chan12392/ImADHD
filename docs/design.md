@@ -353,23 +353,24 @@ baekho-tg/                          # 레포 루트 (git private)
 
 1. **잘못된 터미널 주입**: pending 중 본문이 의도치 않은 메시지여도 주입됨.
    - 완화: TTL 300초(5분). 클릭 직후 바로 본문 치는 흐름 권장. **취소 토글**(같은 번호 재클릭)로 의도치 않은 대기 해제 가능.
-2. **ReplyKeyboard 활성 갱신**: 핀 메시지를 `editMessageText`(본문+markup)로 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
-3. **버튼 클릭 메시지 잔류**: `1️⃣.⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
+2. **ReplyKeyboard 활성 갱신**: ~본문·버튼 분리(12.11) 후 버튼은 고정(번호만)이라 본문 edit와 무관. 활성 키보드 = keyboard_msg 고정.~
+3. **버튼 클릭 메시지 잔류**: `1️⃣`(번호만) 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
 4. **대기 상태 비가시성(해소 2026-07-03)**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됐음. → **⏳ 시각화** 추가(12.9).
-5. **router 재시작 시 핀 메시지 옛날 고정(수정 2026-07-03)**: `PinBoard.__init__`이 저장된 핀 msg_id를 신뢰해 `_last_key`를 현재 active 상태로 세팅했음. registry active가 안정적(변화 없음)이면 refresh_if_changed가 edit 스킵 → 핀 메시지가 router 시작 전 옛날 상태(❌ 6개)로 영정 고정. "다른 CC 열었는데 이모지 안 바뀜" 증상.
-   - **수정**: `__init__`에서 msg_id 있어도 `_last_key=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화.
-6. **핀 메시지 무효(edit 불가) 시 자동 repin(수정 2026-07-03)**: 핀 msg_id가 삭제/무효되면 editMessageText 400 "message can't be edited" 반환. 기존엔 모든 400을 catch해 조용히 실패 → 핀 영정("모래시계 안 바뀜"/"2번 ❌ 유지" 증상).
-   - **수정**: `client.edit_message_text`가 400 중 "not modified"(내용 동일, 정상)만 catch, 그 외("can't be edited"/"not found")는 raise. `PinBoard.refresh_if_changed`가 edit 예외 시 자동 `repin()`(구 핀 delete + 새 메시지 생성+핀). 핀이 삭제돼도 다음 refresh에 자가복구.
+5. **router 재시작 시 핀 메시지 옛날 고정(수정 2026-07-03)**: `PinBoard.__init__`이 저장된 핀 msg_id를 신뢰해 `_last_text`를 현재 active 상태로 세팅했음. registry active가 안정적(변화 없음)이면 refresh_if_changed가 edit 스킵 → 핀 메시지가 router 시작 전 옛날 상태(❌ 6개)로 영정 고정. "다른 CC 열었는데 이모지 안 바뀜" 증상.
+   - **수정**: `__init__`에서 msg_id 있어도 `_last_text=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화.
+6. **단일 메시지 edit 실패 → 본문·버튼 분리로 근본 해결(수정 2026-07-03)**: 12.3의 "본문+markup 단일 메시지를 editMessageText로 갱신" 설계는 Telegram 제약 충돌. `reply_markup`(ReplyKeyboard) 포함 메시지는 editMessageText 시 400 **"message can't be edited"** 반환(markup 없는 순수 텍스트만 edit 가능, 라이브 API 검증 확보). → 단일 메시지 edit이 계속 실패 → 자동 repin 발동 → "지웠다 다시 고정" 무한 반복(대표님 제보).
+   - **근본 수정(12.11)**: 본문(상태 텍스트, markup 없음→edit 가능)과 버튼(ReplyKeyboard, 번호만→고정)을 **2개 메시지로 분리**. 상태 갱신은 본문만 editMessageText → 핀 고정 유지한 채 실시간 갱신, repin 발동 없음.
+   - (참고) `client.edit_message_text`는 400 중 "not modified"(내용 동일, 정상)만 catch, 그 외는 raise → 상위에서 repin 유도(본문이 삭제/무효된 예외 상황용 자가복구 경로로 남김).
 
 ### 12.8 라이브 검증 체크리스트
 
 - [x] 기존 인라인 핀(#147) → ReplyKeyboard(#154) 교체 (repin.py)
-- [x] 47/47 테스트 통과 (선택모드 pending + 토글(취소/교체) + do_inject + 보드 ReplyKeyboard/핀/실시간)
-- [x] router 재시작 시 핀 옛날 고정 버그 수정(`_last_key=None` 강제 동기화, 2026-07-03)
+- [x] router 재시작 시 핀 옛날 고정 버그 수정(`_last_text=None` 강제 동기화, 2026-07-03)
 - [x] pm2 `imadhd` 재시작 정상 기동 (에러 없음)
-- [x] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 버튼 클릭 후 본문 시 주입 정상 (2026-07-03 라이브 — "잘 보여" 본문이 선택모드로 정상 주입됨 확인)
-- [ ] 터미널 on-off 시 마크(⭕❌) 자동 변경 확인 (대기)
-- [ ] 대기 토글(같은 번호 재클릭=취소 / 다른 번호=교체) 라이브 확인 (대기)
+- [x] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 버튼 클릭 후 본문 시 주입 정상 (2026-07-03 라이브)
+- [x] **본문·버튼 분리(12.11)**: 222(순수 텍스트 본문) editMessageText 정상 ok=True / 224(ReplyKeyboard) 고정 / 분리 후 400 에러 0 (2026-07-03 라이브 검증)
+- [ ] 터미널 on-off 시 마크(⭕❌) 자동 변경 라이브 확인 (대기)
+- [ ] 대기 토글 + ⏳ 이동 라이브 확인 (대기)
 
 ### 12.9 ⏳ 선택대기 시각화 (추가 2026-07-03)
 
@@ -399,3 +400,34 @@ baekho-tg/                          # 레포 루트 (git private)
 - 백호 본체 `~/.claude/scripts/baekho-tg-reply.py` 동일 패턴(같은 봇 토큰, 폴백 경로). chunk 분할 시 코드블록 경계 잘림 가능(장문은 한 메시지 권장).
 
 **리스크**: Markdown V1 미지원 문법(`# 제목`, `- 리스트` plain 처리). V2(이스케이프 엄격) 대안 있으나 400 위험 커 V1 채택.
+
+### 12.11 본문·버튼 분리 — 단일 핀 메시지 실시간 갱신 (최종 아키텍처, 추가 2026-07-03)
+
+대표님 요청: "고정된 걸 계속 지웠다 다시 고정하지 말고, 한 번 고정한 걸 그냥 갱신."
+
+**근본 원인(라이브 API 검증)**: 12.3의 "본문 + ReplyKeyboard 단일 메시지" 설계는 Telegram 제약과 충돌.
+- `reply_markup`(ReplyKeyboard) 포함 메시지 → `editMessageText` 호출 시 400 **"message can't be edited"** (markup 없는 순수 텍스트만 edit 가능).
+- 직접 검증: 동일 chat에서 markup 없는 msg(#220) edit **ok**, markup 있는 msg(#221) edit **400 can't be edited**.
+- 결과: 매 상태 변화마다 edit 실패 → 자동 repin → **delete + 재생성 + re-pin 반복**(= "지웠다 다시 고정").
+
+**해결 — 2개 메시지 분리** (`imadhd/boards/pin_board.py`):
+
+| 메시지 | 역할 | 특성 |
+|---|---|---|
+| **status_msg**(상단 핀) | 본문 = 상태 마크 `1️⃣.⏳ 2️⃣.⭕ …` | markup **없음** → `editMessageText` 실시간 갱신 **가능** |
+| **keyboard_msg**(입력창 아래) | 버튼 = 번호만 `1️⃣ 2️⃣ …6️⃣` (상태마크 없음) | ReplyKeyboard. **고정**(상태와 무관 → edit 불필요) |
+
+- 버튼에서 상태마크 제거(번호만) → 상태 변해도 버튼 변화 없음 → keyboard_msg는 생성 1회만.
+- 핀(pinChatMessage)은 status_msg에만 → 상단 고정 유지한 채 본문만 갱신.
+- **상태 갱신 = status_msg editMessageText 1회**. repin(delete/re-create) 발동 안 함.
+
+**PinBoard 변경**:
+- 속성: `status_id`/`keyboard_id` + 영구 저장 파일 2개(`pin_message_id.txt`=본문, `keyboard_message_id.txt`).
+- `create()`: status send(markup 없음→핀) + keyboard send(ReplyKeyboard).
+- `refresh_if_changed(pending_num)`: 본문만 editMessageText(markup 없음). `_last_text`로 변경 감지(동일 시 skip, 400 방지). edit 예외(본문 무효) 시에만 `repin()`.
+- `keyboard_markup()`: 버튼 텍스트 = 번호이모지만(상태마크 없음). 고정.
+- `repin.py`: `msg_id` → `status_id`/`keyboard_id` 출력으로 수정.
+
+**검증(2026-07-03 라이브)**: pm2 재시작 후 자동 repin 1회(status_id=222, keyboard_id=224 생성). 이후 error.log 400 없음. 222 직접 editMessageText → ok=True. 분리 구조 정상 작동, repin 루프 해소.
+
+**트레이드오프**: 메시지 2건 사용(본문+버튼). 본문 edit = 무한 갱신 가능, 버튼 고정 = 상태 표시 불가(상태는 본문으로). 대표님 "갱신만, 삭제/재고정 금지" 요구 정확히 부합.
