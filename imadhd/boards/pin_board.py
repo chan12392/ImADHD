@@ -35,11 +35,11 @@ class PinBoard:
         self.max_slots = max_slots
         self.id_file = Path(data_dir) / "pin_message_id.txt"
         self.msg_id = self._load_id()
-        # 시작 시 현재 (text, markup) 으로 초기화 → 첫 refresh_if_changed 가
-        # 보드 실제와 동일하면 edit 안 함 ("not modified" 400 회피).
-        self._last_key: tuple | None = (
-            self._key(self.status_text(), self.status_markup()) if self.msg_id else None
-        )
+        # 저장된 핀 msg_id 가 있어도 _last_key=None → 첫 refresh_if_changed 가
+        # 무조건 edit 시도. router 재시작 시 핀 메시지가 옛날 상태로 고정되는
+        # 버그 방지(registry active 는 안정이라 key 같으면 edit 스킵 → 핀 방치).
+        # edit_message_text 가 400 "not modified" 를 잡으므로 불필요 edit도 안전.
+        self._last_key: tuple | None = None
 
     def _load_id(self) -> int | None:
         try:
