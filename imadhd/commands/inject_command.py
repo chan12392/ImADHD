@@ -29,7 +29,7 @@ EMOJI_TO_NUM = {
     "7️⃣": 7, "8️⃣": 8, "9️⃣": 9,
 }
 
-PENDING_TTL = 60  # 선택 대기 초과 → 자동 해제(초)
+PENDING_TTL = 300  # 선택 대기 5분 초과 → 자동 해제(초)
 
 
 class InjectCommand(Command):
@@ -49,10 +49,17 @@ class InjectCommand(Command):
             ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료")
             return
         body = msg.text[len(leading_emoji(msg.text)):].strip()
-        # A) 버튼 클릭(상태마크만/빈 본문) → 선택모드 pending (안내 생략)
-        if not body or body in {"⭕", "❌", "📝"}:
-            ctx.pending[str(msg.chat_id)] = (num, time.time())
-            _debug_log(f"[select] num={num} pending set")
+        # A) 버튼 클릭(번호+상태마크, 점 구분 포함) → 선택모드 pending 토글
+        clean = body.replace(".", "").strip()
+        if not clean or clean in {"⭕", "❌", "📝"}:
+            chat = str(msg.chat_id)
+            existing = ctx.pending.get(chat)
+            if existing and existing[0] == num:
+                del ctx.pending[chat]                       # 같은 번호 재클릭 → 대기 취소
+                _debug_log(f"[select] num={num} pending cancelled")
+            else:
+                ctx.pending[chat] = (num, time.time())      # 신규/다른 번호 → 대기 교체
+                _debug_log(f"[select] num={num} pending set")
             return
         # B) 본문 있으면 즉시 주입
         do_inject(ctx, num, body, msg.chat_id)

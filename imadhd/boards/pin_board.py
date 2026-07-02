@@ -63,7 +63,7 @@ class PinBoard:
                 mark = "📝"
             else:
                 mark = "⭕"
-            parts.append(f"{emoji}{mark}")
+            parts.append(f"{emoji}.{mark}")
         return "  ".join(parts)
 
     def status_markup(self) -> dict:
@@ -79,7 +79,7 @@ class PinBoard:
                 mark = "📝"
             else:
                 mark = "⭕"
-            row.append({"text": f"{emoji}{mark}"})
+            row.append({"text": f"{emoji}.{mark}"})
             if len(row) >= COLS:
                 rows.append(row)
                 row = []
@@ -100,15 +100,17 @@ class PinBoard:
             self.msg_id = mid
             self._last_key = self._key(text, markup)
             self._save_id(mid)
-            # ReplyKeyboard: 핀 불필요(입력창 아래 상시).
+            self.tg.pin_chat_message(self.chat, mid)   # 상단 핀 고정
 
     def refresh_if_changed(self) -> None:
         if not self.msg_id:
             return
+        text = self.status_text()
         markup = self.status_markup()
-        key = self._key(self.status_text(), markup)
+        key = self._key(text, markup)
         if key != self._last_key:
-            self.tg.edit_message_reply_markup(self.chat, self.msg_id, markup)
+            # 핀 메시지 본문(text) + 키보드(markup) 둘 다 실시간 갱신
+            self.tg.edit_message_text(self.chat, self.msg_id, text, reply_markup=markup)
             self._last_key = key
 
     def repin(self) -> None:

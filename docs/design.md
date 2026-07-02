@@ -282,20 +282,25 @@ baekho-tg/                          # 레포 루트 (git private)
 
 → "버튼 클릭 → 입력창만 채우기"는 **불가능** 확인.
 
-### 12.3 채택 — 선택 모드 (ReplyKeyboard 유지 + 흔적 최소화)
+### 12.3 채택 — 선택 모드 (ReplyKeyboard + 핀 고정 + 흔적 최소화)
 
-대표님 결정: **ReplyKeyboard(입력창 아래) 유지 + 클릭 흔적 최소** (옵션 A).
+대표님 결정: **ReplyKeyboard(입력창 아래) + 보드 메시지 상단 핀 고정 + 실시간 갱신 + 클릭 흔적 최소** (옵션 A).
 
-- 버튼 클릭(번호+상태마크) → **선택모드 대기**(pending) 등록. **안내 메시지 생략**.
-- 다음 본문 메시지(번호 없음) → 대기 번호로 주입(60초 TTL).
-- 버튼 클릭 시 어쩔 수 없이 `1️⃣⭕` 메시지 1줄은 채팅에 남음(ReplyKeyboard 제약). 안내 회신 생략으로 부담 최소화.
+- 보드 메시지(상태 텍스트 + ReplyKeyboard)를 **상단 핀 고정**(`pinChatMessage`). 스크롤에 안 묻힘.
+- 상태 변 시 **본문 + 키보드 둘 다 실시간 갱신**(`editMessageText`에 `reply_markup` 포함). 마크(⭕📝❌) 즉시 반영.
+- 버튼 텍스트/상태 텍스트 포맷: 번호이모지와 마크 사이 **점(`.`) 구분** → `1️⃣.⭕`. (숫자와 상태 시인성 분리.)
+- 버튼 클릭(번호+점+상태마크) → **선택모드 대기**(pending) 등록. **안내 메시지 생략**.
+- **대기 토글**: 같은 번호 재클릭 → 대기 취소. 다른 번호 클릭 → 대기 번호 교체. (대표님 요청 "한 번 더 누르면 취소, 다른 번호 누르면 변경".)
+- 다음 본문 메시지(번호 없음) → 대기 번호로 주입(**300초(5분) TTL**).
+- 버튼 클릭 시 어쩔 수 없이 `1️⃣.⭕` 메시지 1줄은 채팅에 남음(ReplyKeyboard 제약). 안내 회신 생략으로 부담 최소화.
 
 ### 12.4 컴포넌트 변경
 
 **PinBoard** (`imadhd/boards/pin_board.py`):
-- `status_markup()` → `{"keyboard": rows, "resize_keyboard": True}` (ReplyKeyboard). 버튼 텍스트 = `번호+상태마크`(예 `1️⃣⭕`). `callback_data` 없음.
-- `create()` → 핀 제거. 일반 `sendMessage` + `reply_markup`.
-- `refresh_if_changed()` → `editMessageReplyMarkup`(키보드만 갱신, 텍스트 고정, API 절약). 상태 변 시 마크 업데이트.
+- `status_markup()` → `{"keyboard": rows, "resize_keyboard": True}` (ReplyKeyboard). 버튼 텍스트 = `번호.상태마크`(예 `1️⃣.⭕`). `callback_data` 없음.
+- `status_text()` → 동일 포맷 `번호.마크`를 공백으로 조인(본문 표시용).
+- `create()` → `sendMessage`(본문+ReplyKeyboard) 후 `pinChatMessage`로 **상단 핀 고정**.
+- `refresh_if_changed()` → `editMessageText`(본문 + `reply_markup` 둘 다 갱신). `(text, markup)` 키로 변경 감지, 동일 시 skip(400 "not modified" 방지).
 - `repin()` → 기존 보드 메시지 delete + 재생성(포맷 교체용, `python -m scripts.repin`).
 - msg_id 영구 저장: `~/.imadhd/pin_message_id.txt`.
 
@@ -304,10 +309,11 @@ baekho-tg/                          # 레포 루트 (git private)
 - `get_updates()` → `allowed_updates=["message"]` 단순화(callback_query 미수신).
 
 **InjectCommand** (`imadhd/commands/inject_command.py`):
-- 버튼 클릭 감지: 본문이 상태마크(`⭕❌📝`)만 또는 빈 값 → `ctx.pending[chat]=(num, time.time())` 등록, 주입/안내 없이 return.
+- 버튼 클릭 감지: 본문에서 점(`.`) 제거 후 상태마크(`⭕❌📝`)만 또는 빈 값이면 선택모드 분기.
+  - **대기 토글**: `ctx.pending[chat]` 기존 번호 == 클릭 번호 → `del`(취소). 아니면(신규/다른 번호) → `ctx.pending[chat]=(num, time.time())`(교체/등록). 주입/안내 없이 return.
 - 본문 있으면 `do_inject()` 즉시 주입.
 - `do_inject(ctx, num, body, chat)` 헬퍼: alive 재체크 + 본문 정규화(한 줄, `\n` 제거) + 마커 부착 + busy 설정. router pending 주입이 함께 사용.
-- `PENDING_TTL = 60` 상수.
+- `PENDING_TTL = 300` 상수(5분).
 
 **CommandContext** (`imadhd/commands/base.py`):
 - `pending: dict` 필드 추가(`field(default_factory=dict)`). `chat_id → (num, timestamp)`.
@@ -319,16 +325,20 @@ baekho-tg/                          # 레포 루트 (git private)
 ### 12.5 데이터 흐름 (선택 모드)
 
 ```
-[대표님] 1️⃣⭕ 버튼 클릭
-  → ReplyKeyboard: "1️⃣⭕" 메시지 즉시 전송 (채팅에 1줄 남음)
+[대표님] 1️⃣.⭕ 버튼 클릭
+  → ReplyKeyboard: "1️⃣.⭕" 메시지 즉시 전송 (채팅에 1줄 남음)
   → router: InjectCommand.match → handle
-  → body="⭕"(상태마크) → ctx.pending["chat"]=(1, ts). 안내 생략.
+  → body=".⭕" → 점 제거 → "⭕"(상태마크)
+  → ctx.pending 미사용 → pending["chat"]=(1, ts). 안내 생략.
 [대표님] "로그 확인해줘" (번호 없음)
-  → router: parse_leading_number=None + pending 있음 + TTL(60s) 내
+  → router: parse_leading_number=None + pending 있음 + TTL(300s) 내
   → do_inject(ctx, 1, "로그 확인해줘", chat)
   → CC-1 주입: "로그 확인해줘 [텔레그램에서 온 요청]"
   → pending 소비. CC 답변 마커 → Stop 훅 회신.
-(60초 경과 본문 없음 → pending 자동 해제)
+
+[토글] 대기 중 같은 번호 재클릭(1️⃣.⭕) → pending 삭제(대기 취소).
+[교체] 대기 중 다른 번호 클릭(2️⃣.⭕) → pending[chat]=(2, ts) 교체.
+(300초(5분) 경과 본문 없음 → pending 자동 해제)
 ```
 
 ### 12.6 트레이드오프 결정 기록
@@ -342,13 +352,16 @@ baekho-tg/                          # 레포 루트 (git private)
 ### 12.7 리스크 & 보완
 
 1. **잘못된 터미널 주입**: pending 중 본문이 의도치 않은 메시지여도 주입됨.
-   - 완화: TTL 60초로 짧게. 클릭 직후 바로 본문 치는 흐름 권장.
-2. **ReplyKeyboard 활성 갱신**: `editMessageReplyMarkup`으로 상태 마크 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
-3. **버튼 클릭 메시지 잔류**: `1️⃣⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
+   - 완화: TTL 300초(5분). 클릭 직후 바로 본문 치는 흐름 권장. **취소 토글**(같은 번호 재클릭)로 의도치 않은 대기 해제 가능.
+2. **ReplyKeyboard 활성 갱신**: 핀 메시지를 `editMessageText`(본문+markup)로 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
+3. **버튼 클릭 메시지 잔류**: `1️⃣.⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
+4. **대기 상태 비가시성**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됨. 토글/교체 흐름이므로 메모리 기준. (필요시 보드 텍스트에 대기 번호 하이라이트 검토 가능.)
 
 ### 12.8 라이브 검증 체크리스트
 
 - [x] 기존 인라인 핀(#147) → ReplyKeyboard(#154) 교체 (repin.py)
-- [x] 45/45 테스트 통과 (선택모드 pending + do_inject + 보드 ReplyKeyboard)
+- [x] 47/47 테스트 통과 (선택모드 pending + 토글(취소/교체) + do_inject + 보드 ReplyKeyboard/핀/실시간)
 - [x] pm2 `imadhd` 재시작 정상 기동 (에러 없음)
-- [ ] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 터미널 on-off 시 마크(⭕❌) 변경 / 버튼 클릭 후 본문 시 주입 정상
+- [x] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 버튼 클릭 후 본문 시 주입 정상 (2026-07-03 라이브 — "잘 보여" 본문이 선택모드로 정상 주입됨 확인)
+- [ ] 터미널 on-off 시 마크(⭕❌) 자동 변경 확인 (대기)
+- [ ] 대기 토글(같은 번호 재클릭=취소 / 다른 번호=교체) 라이브 확인 (대기)
