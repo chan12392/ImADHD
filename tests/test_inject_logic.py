@@ -55,3 +55,28 @@ def test_inject_unknown_number(tmp_path):
     InjectCommand().handle(Message("42", "5️⃣ hi", {}), ctx)
     assert tr.injected is None
     assert any("없음" in t for _, t in tg.sent)
+
+
+def test_button_click_sets_pending_no_inject(tmp_path):
+    """ReplyKeyboard 버튼 클릭(번호+상태마크) → 선택모드 pending. 주입X, 안내 생략."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    InjectCommand().handle(Message("42", "1️⃣⭕", {}), ctx)
+    assert tr.injected is None              # 주입 안 됨
+    assert tg.sent == []                    # 안내 메시지 생략
+    assert ctx.pending.get("42", (None,))[0] == 1
+
+
+def test_do_inject_consumes_body(tmp_path):
+    """router pending 본문 주입 경로(do_inject) 검증."""
+    from imadhd.commands.inject_command import do_inject
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    do_inject(ctx, 1, "안녕 백호", "42")
+    assert tr.injected is not None
+    _, text = tr.injected
+    assert "안녕 백호" in text and "[텔레그램에서 온 요청]" in text

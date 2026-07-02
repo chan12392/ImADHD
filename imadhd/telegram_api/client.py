@@ -32,6 +32,7 @@ class TelegramClient:
             return json.loads(r.read().decode("utf-8"))
 
     def get_updates(self, timeout: int = 30) -> list:
+        # message만 수신 (ReplyKeyboard 클릭 = 텍스트 메시지로 도착)
         params = {"timeout": timeout, "allowed_updates": ["message"]}
         offset = self._load_offset()
         if offset:
@@ -42,21 +43,58 @@ class TelegramClient:
             self._save_offset(result[-1].get("update_id", 0) + 1)
         return result
 
-    def send(self, chat_id: str, text: str) -> int | None:
-        """메시지 전송. 반환=message_id (pin 용)."""
+    def send(self, chat_id: str, text: str, reply_markup: dict | None = None) -> int | None:
+        """메시지 전송. 반환=message_id (pin 용). reply_markup=인라인 키보드."""
         if not chat_id:
             return None
-        resp = self._api("sendMessage", {"chat_id": chat_id, "text": text}, timeout=10)
+        data = {"chat_id": chat_id, "text": text}
+        if reply_markup:
+            data["reply_markup"] = reply_markup
+        resp = self._api("sendMessage", data, timeout=10)
         return resp.get("result", {}).get("message_id")
 
-    def edit_message_text(self, chat_id: str, message_id: int, text: str) -> None:
+    def edit_message_text(self, chat_id: str, message_id: int, text: str,
+                          reply_markup: dict | None = None) -> None:
+        if not chat_id or not message_id:
+            return
+        data = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if reply_markup:
+            data["reply_markup"] = reply_markup
+        try:
+            self._api("editMessageText", data, timeout=10)
+        except urllib.error.HTTPError as e:
+            # 400 "message is not modified" = 내용 동일(정상). 핀 갱신은 best-effort.
+            if e.code != 400:
+                raise
+
+    def edit_message_reply_markup(self, chat_id: str, message_id: int,
+                                  reply_markup: dict | None) -> None:
+        """ReplyKeyboard 갱신: 메시지 텍스트 유지, 키보드만 교체."""
+        if not chat_id or not message_id or not reply_markup:
+            return
+        data = {"chat_id": chat_id, "message_id": message_id, "reply_markup": reply_markup}
+        try:
+            self._api("editMessageReplyMarkup", data, timeout=10)
+        except urllib.error.HTTPError as e:
+            # 400 "message is not modified" = 동일(정상). best-effort.
+            if e.code != 400:
+                raise
+
+    def answer_callback(self, callback_query_id: str, text: str) -> None:
+        """인라인 버튼 클릭 토스트 응답(callback_query). answerCallbackQuery."""
+        if not callback_query_id:
+            return
+        self._api("answerCallbackQuery",
+                  {"callback_query_id": callback_query_id, "text": text, "show_alert": False},
+                  timeout=10)
+
+    def delete_message(self, chat_id: str, message_id: int) -> None:
+        """메시지 삭제. 기존 핀 교체 시 구 핀 정리용."""
         if not chat_id or not message_id:
             return
         try:
-            self._api("editMessageText",
-                      {"chat_id": chat_id, "message_id": message_id, "text": text}, timeout=10)
+            self._api("deleteMessage", {"chat_id": chat_id, "message_id": message_id}, timeout=10)
         except urllib.error.HTTPError as e:
-            # 400 "message is not modified" = 내용 동일(정상). 핀 갱신은 best-effort.
             if e.code != 400:
                 raise
 
