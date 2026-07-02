@@ -5,10 +5,15 @@
 """
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
+
+from .numberalloc import lowest_free
 
 
 @dataclass
@@ -49,9 +54,81 @@ class Registry(ABC):
 
 
 class JSONFileRegistry(Registry):
-    """TODO: 원자적 쓰기(임시파일+rename), 파일 록."""
+    """단일 머신 JSON 파일 레지스트리. 원자적 쓰기(임시파일+os.replace)."""
 
-    def __init__(self, path: Path, max_slots: int = 6):
-        self.path = path
+    def __init__(self, path, max_slots: int = 6):
+        self.path = Path(path)
         self.max_slots = max_slots
-        raise NotImplementedError("implemented in plan step")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.path.exists():
+            self._write({})
+
+    def _read(self) -> dict:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.path)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _occupied(data: dict) -> set[int]:
+        return {int(k) for k, v in data.items() if v}
+
+    def claim_slot(self, session_id, hwnd, pid, cwd, started_at):
+        data = self._read()
+        # 동일 session_id 재시작 → 기존 슬롯 재사용(덮어쓰기)
+        for k, v in data.items():
+            if v and v.get("session_id") == session_id:
+                num = int(k)
+                data[k] = SessionInfo(num, session_id, hwnd, pid, cwd, started_at).to_dict()
+                self._write(data)
+                return num
+        free = lowest_free(self._occupied(data), self.max_slots)
+        if free is None:
+            return None
+        data[str(free)] = SessionInfo(free, session_id, hwnd, pid, cwd, started_at).to_dict()
+        self._write(data)
+        return free
+
+    def get(self, number: int) -> Optional[SessionInfo]:
+        data = self._read()
+        v = data.get(str(number))
+        return SessionInfo(**v) if v else None
+
+    def find_by_session(self, session_id: str) -> Optional[SessionInfo]:
+        data = self._read()
+        for v in data.values():
+            if v and v.get("session_id") == session_id:
+                return SessionInfo(**v)
+        return None
+
+    def release(self, number: int) -> bool:
+        data = self._read()
+        key = str(number)
+        if key in data and data[key]:
+            data[key] = None
+            self._write(data)
+            return True
+        return False
+
+    def active(self) -> list[SessionInfo]:
+        data = self._read()
+        out: list[SessionInfo] = []
+        for k in sorted(data, key=lambda x: int(x)):
+            v = data[k]
+            if v:
+                out.append(SessionInfo(**v))
+        return out
