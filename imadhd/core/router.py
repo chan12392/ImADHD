@@ -1,6 +1,7 @@
 """라우터 메인루프: 텔레그램 롱폴 → 명령 매칭 → 주입/회신.
 
-확장: commands 리스트에 Command 추가하면 자동으로 새 명령 인식.
+매 폴링 전 감시(sweep): 죽은 터미널 슬롯 정리 + "❌ N번 종료" 알림 + 공지 갱신.
+확장: commands 리스트에 Command 추가하면 자동 인식.
 """
 from __future__ import annotations
 
@@ -21,23 +22,43 @@ def run(settings: "Settings") -> None:
     from ..commands.base import Message, CommandContext
     from ..commands.inject_command import InjectCommand
     from ..commands.list_command import ListCommand
+    from ..commands.pin_command import PinCommand
+    from ..boards.pin_board import PinBoard
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     tg = TelegramClient(settings.bot_token, settings.offset_path, settings.allowed_chat_id)
     reg = JSONFileRegistry(settings.registry_path, settings.max_slots)
     transport = SendKeysWinTransport()
-    commands = [ListCommand(), InjectCommand()]
+    board = PinBoard(tg, reg, settings.allowed_chat_id, settings.data_dir, settings.max_slots)
+    commands = [PinCommand(board), ListCommand(), InjectCommand()]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
 
+    alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
+
     log.info("router start: slots=%d data_dir=%s", settings.max_slots, settings.data_dir)
+    board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
+
     while True:
+        # 감시: 죽은 슬롯 정리 + 종료 알림 + 공지 갱신
         try:
-            updates = tg.get_updates(timeout=30)
+            before = {i.number for i in reg.active()}
+            reg.sweep_dead(alive_fn)
+            after = {i.number for i in reg.active()}
+            for n in sorted(before - after):
+                tg.send(settings.allowed_chat_id, f"❌ {n}번 터미널 종료")
+            board.refresh_if_changed()
+        except Exception as e:
+            log.warning("sweep/board error: %s", e)
+
+        # 텔레그램 롱폴
+        try:
+            updates = tg.get_updates(timeout=15)
         except Exception as e:
             log.warning("getUpdates failed: %s — retry in 5s", e)
             time.sleep(5)
             continue
+
         for upd in updates:
             m = upd.get("message") or upd.get("edited_message")
             if not m:
@@ -51,6 +72,7 @@ def run(settings: "Settings") -> None:
                 try:
                     if cmd.match(msg):
                         cmd.handle(msg, ctx)
+                        board.refresh_if_changed()
                         break
                 except Exception as e:
                     log.exception("command %s failed: %s", type(cmd).__name__, e)

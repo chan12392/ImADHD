@@ -24,6 +24,7 @@ class SessionInfo:
     pid: int
     cwd: str
     started_at: str
+    status: str = "idle"   # idle | busy (작업중 📝)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -126,6 +127,24 @@ class JSONFileRegistry(Registry):
             data[key] = None
             self._write(data)
             return True
+        return False
+
+    def set_status(self, number: int, status: str) -> bool:
+        data = self._read()
+        v = data.get(str(number))
+        if v:
+            v["status"] = status
+            self._write(data)
+            return True
+        return False
+
+    def set_status_by_session(self, session_id: str, status: str) -> bool:
+        data = self._read()
+        for v in data.values():
+            if v and v.get("session_id") == session_id:
+                v["status"] = status
+                self._write(data)
+                return True
         return False
 
     def active(self) -> list[SessionInfo]:

@@ -44,6 +44,7 @@ def main() -> int:
     if info:
         inv = {v: k for k, v in EMOJI_TO_NUM.items()}
         emoji = inv.get(info.number, f"[{info.number}]")
+        reg.set_status_by_session(session_id, "idle")   # 작업 완료 → ⭕ 복귀
 
     if not s.allowed_chat_id:
         return 0

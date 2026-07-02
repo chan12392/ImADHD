@@ -11,6 +11,17 @@ from __future__ import annotations
 
 from .base import Command, Message, CommandContext
 
+
+def _debug_log(line: str) -> None:
+    try:
+        from pathlib import Path
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
 # 숫자이모지 → 숫자 매핑 (1..6, 여유분 7..9 포함)
 EMOJI_TO_NUM = {
     "1️⃣": 1, "2️⃣": 2, "3️⃣": 3, "4️⃣": 4, "5️⃣": 5, "6️⃣": 6,
@@ -31,16 +42,20 @@ class InjectCommand(Command):
             ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
             return
         target = info.to_dict()
-        if not ctx.transport.is_alive(target):
+        alive = ctx.transport.is_alive(target)
+        _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]} is_alive={alive}")
+        if not alive:
             ctx.registry.release(num)
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 꺼짐 → 슬롯 반납")
+            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료")
             return
         body = msg.text[len(leading_emoji(msg.text)):].strip() or "(빈 입력)"
-        ctx.telegram.send(msg.chat_id, f"📩 {num}번 ← {body[:40]}")
+        # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
+        body = " ".join(body.split())
         inject_text = (
-            f"{body}\n\n"
-            f"[텔레그램에서 온 요청. 답변 끝에 '{ctx.settings.reply_marker}' 출력]"
+            f"{body}  [텔레그램에서 온 요청. 1~2문장으로 짧게 답하고 "
+            f"답변 끝에 '{ctx.settings.reply_marker}' 출력]"
         )
+        ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
         ctx.transport.inject(target, inject_text)
 
 

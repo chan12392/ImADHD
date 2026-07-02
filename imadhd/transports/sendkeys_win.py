@@ -1,9 +1,7 @@
 """Windows ctypes 기반 send_keys transport.
 
-기존 send_keys_to_claude.py 로직 이식 + 확장:
-  - HWND 직접 지정
-  - --bg (백그라운드 PostMessage, 베타, 도달 보장 없음)
-  - IsWindow 사전체크
+입력 = SendInput KEYEVENTF_UNICODE (유니코드 직접 → 한글/특수문자 가능).
+keybd_event/VkKeyScan 경로는 한글(IME 조합) VK 를 못 얻어 폐기.
 
 Windows 전용. 타 OS 에서는 미임포트(ImportError) → config 에서 다른 transport 선택.
 """
@@ -18,14 +16,76 @@ from .base import Transport, InjectResult
 user32 = ctypes.windll.user32
 
 VK_RETURN = 0x0D
-VK_SHIFT = 0x10
+INPUT_KEYBOARD = 1
+KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
 WM_CHAR = 0x0102
 
 
-def _vk_and_shift(ch: str):
-    vks = user32.VkKeyScanW(ord(ch))
-    return vks & 0xFF, (vks >> 8) & 0x01
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong))]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", ctypes.c_ulong), ("wParamL", ctypes.c_short),
+                ("wParamH", ctypes.c_ushort)]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT), ("mi", _MOUSEINPUT), ("hi", _HARDWAREINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", ctypes.c_ulong), ("u", _INPUT_UNION)]
+
+
+user32.SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int]
+user32.SendInput.restype = ctypes.c_uint
+
+
+def _type_unicode(text: str) -> None:
+    """각 문자 UNICODE SendInput 전송 (한글 포함). 끝에 Enter.
+    \n/\r 은 CC 터미널에서 Enter(제출)로 작동 → 스페이스로 치환(분할 주입 방지).
+    """
+    text = text.replace("\r", " ").replace("\n", " ")
+    for ch in text:
+        scan = ord(ch)
+        down = _INPUT()
+        down.type = INPUT_KEYBOARD
+        down.ki.wVk = 0
+        down.ki.wScan = scan
+        down.ki.dwFlags = KEYEVENTF_UNICODE
+        up = _INPUT()
+        up.type = INPUT_KEYBOARD
+        up.ki.wVk = 0
+        up.ki.wScan = scan
+        up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+        arr = (_INPUT * 2)(down, up)
+        user32.SendInput(2, arr, ctypes.sizeof(_INPUT))
+        time.sleep(0.01)
+    user32.keybd_event(VK_RETURN, 0, 0, 0)
+    user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+
+
+def _diag_log(line: str) -> None:
+    try:
+        from pathlib import Path
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 class SendKeysWinTransport(Transport):
@@ -60,19 +120,33 @@ class SendKeysWinTransport(Transport):
             return False
 
     def _focus_type(self, hwnd, text: str) -> None:
+        kernel32 = ctypes.windll.kernel32
         SW_RESTORE = 9
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, SW_RESTORE)
-        user32.SetForegroundWindow(hwnd)
-        time.sleep(0.4)
-        for ch in text:
-            vk, shift = _vk_and_shift(ch)
-            if shift:
-                user32.keybd_event(VK_SHIFT, 0, 0, 0)
-            user32.keybd_event(vk, 0, 0, 0)
-            user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-            if shift:
-                user32.keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.02)
-        user32.keybd_event(VK_RETURN, 0, 0, 0)
-        user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+        # 포커스락 타임아웃 0 → 백그라운드 프로세스도 SetForegroundWindow 허용
+        SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+        try:
+            user32.SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, None, 0)
+        except Exception:
+            pass
+        # 백그라운드 프로세스(router) 포커스 권한 획득: 현재 FG 스레드에 attach
+        fg_now = user32.GetForegroundWindow() or 0
+        tid_fg = user32.GetWindowThreadProcessId(fg_now, None) if fg_now else 0
+        tid_self = kernel32.GetCurrentThreadId()
+        attached = False
+        if tid_fg and tid_fg != tid_self:
+            attached = bool(user32.AttachThreadInput(tid_self, tid_fg, True))
+        try:
+            # Alt 키 흉내 → 사용자 입력으로 간주 → SetForegroundWindow 권한 획득
+            user32.keybd_event(0x12, 0, 0, 0)        # Alt down
+            user32.keybd_event(0x12, 0, KEYEVENTF_KEYUP, 0)  # Alt up
+            ok = user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+            time.sleep(0.4)
+            after_fg = user32.GetForegroundWindow() or 0
+            _diag_log(f"focus hwnd={hwnd} SetFG={ok} attached={attached} fg_before={fg_now} fg_after={after_fg} match={after_fg == hwnd}")
+            _type_unicode(text)
+        finally:
+            if attached:
+                user32.AttachThreadInput(tid_self, tid_fg, False)

@@ -17,31 +17,58 @@ import sys
 from pathlib import Path
 
 
-def _capture_terminal() -> tuple[int, int]:
-    """CC 터미널 창 HWND 와 소유 PID 반환.
+def _capture_terminal() -> tuple[int, int, dict]:
+    """CC 터미널 창 HWND 와 소유 PID 반환 + 진단 정보.
 
     CC 가 훅을 detached 로 spawn → 훅에겐 콘솔 없음(GetConsoleWindow=0).
     따라서 포그라운드 우선: SessionStart 동기 실행 시 포그라운드=CC 터미널.
     폴백: GetConsoleWindow. 최후 os.getpid().
+    반환: (hwnd, pid, diag)  diag={foreground, console, fg_title, chosen}
     """
+    diag = {"foreground": 0, "console": 0, "fg_title": "", "chosen": "none"}
     try:
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
         user32.GetForegroundWindow.restype = wintypes.HWND
-        user32.GetConsoleWindow.restype = wintypes.HWND
+        kernel32.GetConsoleWindow.restype = wintypes.HWND
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-        hwnd = user32.GetForegroundWindow() or 0
-        if not hwnd:
-            hwnd = user32.GetConsoleWindow() or 0
-        if not hwnd:
-            return 0, os.getpid()
+
+        fg = user32.GetForegroundWindow() or 0
+        con = kernel32.GetConsoleWindow() or 0
+        diag["foreground"] = int(fg)
+        diag["console"] = int(con)
+        if fg:
+            buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(fg, buf, 512)
+            diag["fg_title"] = buf.value
+
+        if fg:
+            hwnd, diag["chosen"] = fg, "foreground"
+        elif con:
+            hwnd, diag["chosen"] = con, "console"
+        else:
+            return 0, os.getpid(), diag
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return int(hwnd), int(pid.value)
+        return int(hwnd), int(pid.value), diag
+    except Exception as e:
+        diag["error"] = repr(e)
+        return 0, os.getpid(), diag
+
+
+def _debug_log(line: str) -> None:
+    """~/.imadhd/debug.log 에 진단 라인 추가. 설치 문제 실측용."""
+    try:
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
     except Exception:
-        return 0, os.getpid()
+        pass
 
 
 
@@ -82,8 +109,9 @@ def main() -> int:
     session_id = payload.get("session_id", "") or ""
     cwd = payload.get("cwd", "") or os.getcwd()
 
-    hwnd, pid = _capture_terminal()
+    hwnd, pid, diag = _capture_terminal()
     started = datetime.datetime.now().isoformat(timespec="seconds")
+    _debug_log(f"[register] session={session_id[:8]} pid_self={os.getpid()} hwnd={hwnd} pid_cap={pid} diag={diag}")
 
     from ..config import Settings
     from ..core.registry import JSONFileRegistry
@@ -96,9 +124,11 @@ def main() -> int:
     try:
         import ctypes
         user32 = ctypes.windll.user32
-        reg.sweep_dead(lambda info: bool(info.hwnd and user32.IsWindow(info.hwnd)))
-    except Exception:
-        pass
+        removed = reg.sweep_dead(lambda info: bool(info.hwnd and user32.IsWindow(info.hwnd)))
+        if removed:
+            _debug_log(f"[register] sweep removed {removed} dead slots")
+    except Exception as e:
+        _debug_log(f"[register] sweep error: {e!r}")
 
     # 중복 알림 방지: 동일 session_id + 동일 HWND+PID 면 이미 알림된 상태
     existing = reg.find_by_session(session_id)

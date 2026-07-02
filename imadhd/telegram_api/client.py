@@ -41,10 +41,25 @@ class TelegramClient:
             self._save_offset(result[-1].get("update_id", 0) + 1)
         return result
 
-    def send(self, chat_id: str, text: str) -> None:
+    def send(self, chat_id: str, text: str) -> int | None:
+        """메시지 전송. 반환=message_id (pin 용)."""
         if not chat_id:
+            return None
+        resp = self._api("sendMessage", {"chat_id": chat_id, "text": text}, timeout=10)
+        return resp.get("result", {}).get("message_id")
+
+    def edit_message_text(self, chat_id: str, message_id: int, text: str) -> None:
+        if not chat_id or not message_id:
             return
-        self._api("sendMessage", {"chat_id": chat_id, "text": text}, timeout=10)
+        self._api("editMessageText",
+                  {"chat_id": chat_id, "message_id": message_id, "text": text}, timeout=10)
+
+    def pin_chat_message(self, chat_id: str, message_id: int) -> None:
+        if not chat_id or not message_id:
+            return
+        self._api("pinChatMessage",
+                  {"chat_id": chat_id, "message_id": message_id, "disable_notification": True},
+                  timeout=10)
 
     def _load_offset(self) -> int:
         try:
