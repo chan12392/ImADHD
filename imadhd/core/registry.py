@@ -11,7 +11,7 @@ import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .numberalloc import lowest_free
 
@@ -51,6 +51,10 @@ class Registry(ABC):
     @abstractmethod
     def active(self) -> list[SessionInfo]:
         ...
+
+    @abstractmethod
+    def sweep_dead(self, is_alive: Callable[["SessionInfo"], bool]) -> int:
+        """is_alive(info)가 False인 슬롯 전부 release. 반환=정리된 개수."""
 
 
 class JSONFileRegistry(Registry):
@@ -132,3 +136,15 @@ class JSONFileRegistry(Registry):
             if v:
                 out.append(SessionInfo(**v))
         return out
+
+    def sweep_dead(self, is_alive: Callable[["SessionInfo"], bool]) -> int:
+        data = self._read()
+        removed = 0
+        for k in list(data.keys()):
+            v = data[k]
+            if v and not is_alive(SessionInfo(**v)):
+                data[k] = None
+                removed += 1
+        if removed:
+            self._write(data)
+        return removed

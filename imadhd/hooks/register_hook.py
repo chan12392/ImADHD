@@ -3,10 +3,10 @@
 stdin: CC hook payload JSON (session_id, cwd 등).
 절차:
   1. session_id, cwd 확보
-  2. registry.claim_slot
-  3. GetForegroundWindow() 로 HWND 캡처 (시작 직후 포커스=이 터미널)
-  4. pid 기록
-  5. 텔레그램 알림 "✅ N번 터미널 연결됨"
+  2. registry 의 죽은 슬롯 sweep (IsWindow)
+  3. 이 터미널 콘솔 창 HWND+PID 캡처 (GetConsoleWindow → GetWindowThreadProcessId)
+  4. registry.claim_slot (동일 session_id 재사용 시 갱신)
+  5. 신규/변경 시에만 텔레그램 알림 "✅ N번 터미널 연결됨"
 """
 from __future__ import annotations
 
@@ -15,6 +15,32 @@ import json
 import os
 import sys
 from pathlib import Path
+
+
+def _capture_terminal() -> tuple[int, int]:
+    """이 프로세스의 콘솔 창(= CC 터미널) HWND 와 소유 PID 반환.
+
+    GetConsoleWindow() 가 훅을 spawn 한 CC 콘솔 창을 가리킴(자식은 부모 콘솔 공유).
+    콘솔 없는 환경→포그라운드 폴백, 최후 os.getpid().
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.GetConsoleWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        hwnd = user32.GetConsoleWindow() or 0
+        if not hwnd:
+            hwnd = user32.GetForegroundWindow() or 0
+        if not hwnd:
+            return 0, os.getpid()
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return int(hwnd), int(pid.value)
+    except Exception:
+        return 0, os.getpid()
+
 
 
 def _last_assistant_text(transcript_path: str) -> str:
@@ -54,14 +80,7 @@ def main() -> int:
     session_id = payload.get("session_id", "") or ""
     cwd = payload.get("cwd", "") or os.getcwd()
 
-    try:
-        import ctypes
-        user32 = ctypes.windll.user32
-        hwnd = user32.GetForegroundWindow()
-    except Exception:
-        hwnd = 0
-
-    pid = os.getpid()
+    hwnd, pid = _capture_terminal()
     started = datetime.datetime.now().isoformat(timespec="seconds")
 
     from ..config import Settings
@@ -70,10 +89,27 @@ def main() -> int:
 
     s = Settings.load()
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
+
+    # 죽은 슬롯 정리: IsWindow False → release (고아 슬롯 누적 방지)
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        reg.sweep_dead(lambda info: bool(info.hwnd and user32.IsWindow(info.hwnd)))
+    except Exception:
+        pass
+
+    # 중복 알림 방지: 동일 session_id + 동일 HWND+PID 면 이미 알림된 상태
+    existing = reg.find_by_session(session_id)
+    is_refresh = bool(
+        existing
+        and existing.hwnd == hwnd
+        and existing.pid == pid
+    )
+
     num = reg.claim_slot(session_id, hwnd, pid, cwd, started)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
 
-    if s.allowed_chat_id:
+    if s.allowed_chat_id and not is_refresh:
         if num is None:
             tg.send(s.allowed_chat_id, f"⚠️ 모든 슬롯({s.max_slots}) 사용 중. 세션 미등록(PID {pid}).")
         else:
