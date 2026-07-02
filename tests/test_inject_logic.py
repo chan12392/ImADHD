@@ -44,7 +44,7 @@ def test_inject_alive_injects_with_marker(tmp_path):
     InjectCommand().handle(Message("42", "1️⃣ do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    assert "do work" in text and "텔레그램으로 답변" in text
+    assert "do work" in text and "[텔레그램에서 온 요청]" in text
     assert "\n" not in text                           # 한 줄 주입 (분할 방지)
 
 

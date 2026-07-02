@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -51,8 +52,13 @@ class TelegramClient:
     def edit_message_text(self, chat_id: str, message_id: int, text: str) -> None:
         if not chat_id or not message_id:
             return
-        self._api("editMessageText",
-                  {"chat_id": chat_id, "message_id": message_id, "text": text}, timeout=10)
+        try:
+            self._api("editMessageText",
+                      {"chat_id": chat_id, "message_id": message_id, "text": text}, timeout=10)
+        except urllib.error.HTTPError as e:
+            # 400 "message is not modified" = 내용 동일(정상). 핀 갱신은 best-effort.
+            if e.code != 400:
+                raise
 
     def pin_chat_message(self, chat_id: str, message_id: int) -> None:
         if not chat_id or not message_id:

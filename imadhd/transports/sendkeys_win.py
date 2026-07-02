@@ -90,10 +90,15 @@ def _diag_log(line: str) -> None:
 
 class SendKeysWinTransport(Transport):
     def is_alive(self, target: dict) -> bool:
+        """CC 생사. pid 의 프로세스가 claude.exe 여야 alive.
+        터미널 pid(WindowsTerminal) 로 등록된 레거시 슬롯 → 자동 유령 처리.
+        hwnd-only(구버그) 회피."""
+        pid = target.get("pid")
         hwnd = target.get("hwnd")
-        if not hwnd:
-            return False
-        return bool(user32.IsWindow(hwnd))
+        if pid:
+            from ..core.proc_win import name_of
+            return name_of(pid) == "claude.exe"
+        return bool(hwnd and user32.IsWindow(hwnd))
 
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
         hwnd = target.get("hwnd")

@@ -18,17 +18,23 @@ from pathlib import Path
 
 
 def _capture_terminal() -> tuple[int, int, dict]:
-    """CC 터미널 창 HWND 와 소유 PID 반환 + 진단 정보.
+    """CC 터미널 창 HWND 와 CC PID(claude.exe) 반환 + 진단 정보.
 
-    CC 가 훅을 detached 로 spawn → 훅에겐 콘솔 없음(GetConsoleWindow=0).
-    따라서 포그라운드 우선: SessionStart 동기 실행 시 포그라운드=CC 터미널.
-    폴백: GetConsoleWindow. 최후 os.getpid().
-    반환: (hwnd, pid, diag)  diag={foreground, console, fg_title, chosen}
+    HWND: CC 터미널 창(주입/포커스용). 포그라운드 우선(detached 훅=콘솔없음).
+    PID: **CC 프로세스(claude.exe)** pid — 부모체인에서 탐색.
+        터미널 pid(WindowsTerminal) 가 아니라 CC pid 를 써야
+        CC 종료를 정확히 감지(터미널 창은 탭 닫아도 안 죽음).
+
+    반환: (hwnd, cc_pid, diag)
     """
-    diag = {"foreground": 0, "console": 0, "fg_title": "", "chosen": "none"}
+    diag = {"foreground": 0, "console": 0, "fg_title": "", "chosen": "none",
+            "cc_pid": 0, "terminal_pid": 0}
+    hwnd = 0
+    term_pid = 0
     try:
         import ctypes
         from ctypes import wintypes
+        from ..core.proc_win import find_ancestor
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         user32.GetForegroundWindow.restype = wintypes.HWND
@@ -47,14 +53,23 @@ def _capture_terminal() -> tuple[int, int, dict]:
             diag["fg_title"] = buf.value
 
         if fg:
-            hwnd, diag["chosen"] = fg, "foreground"
+            hwnd, diag["chosen"] = int(fg), "foreground"
         elif con:
-            hwnd, diag["chosen"] = con, "console"
+            hwnd, diag["chosen"] = int(con), "console"
         else:
-            return 0, os.getpid(), diag
-        pid = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return int(hwnd), int(pid.value), diag
+            hwnd = 0
+        if hwnd:
+            pid_box = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_box))
+            term_pid = int(pid_box.value)
+            diag["terminal_pid"] = term_pid
+
+        # CC pid: 이 훅 프로세스(os.getpid()) 부터 부모체인에서 claude.exe 탐색.
+        cc_pid = find_ancestor(os.getpid(), "claude") or 0
+        diag["cc_pid"] = cc_pid
+        # CC pid 못 잡으면 폴백 터미널 pid(구동작 호환).
+        pid_out = cc_pid or term_pid or os.getpid()
+        return hwnd, pid_out, diag
     except Exception as e:
         diag["error"] = repr(e)
         return 0, os.getpid(), diag
@@ -120,11 +135,20 @@ def main() -> int:
     s = Settings.load()
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
 
-    # 죽은 슬롯 정리: IsWindow False → release (고아 슬롯 누적 방지)
+    # 죽은 슬롯 정리: CC pid(claude.exe) 없으면 release (고아 슬롯 누적 방지).
+    # pid 가 CC pid 이므로 CC 종료 시 정확 감지(터미널 pid 였던 구버그 수정).
     try:
+        from ..core.proc_win import exists as _proc_exists
         import ctypes
         user32 = ctypes.windll.user32
-        removed = reg.sweep_dead(lambda info: bool(info.hwnd and user32.IsWindow(info.hwnd)))
+
+        def _alive(info):
+            if _proc_exists(info.pid):
+                return True
+            # CC pid 모르는(구) 슬롯: hwnd 라도 죽었으면 정리.
+            return bool(info.hwnd and user32.IsWindow(info.hwnd))
+
+        removed = reg.sweep_dead(_alive)
         if removed:
             _debug_log(f"[register] sweep removed {removed} dead slots")
     except Exception as e:
