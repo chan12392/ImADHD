@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "imadhd"
+version = "0.1.0"
+description = "Control multiple terminal sessions from one Telegram chat. Each terminal gets a number; route DMs by number emoji."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "younchan" }]
+requires-python = ">=3.9"
+keywords = ["telegram", "terminal", "router", "claude-code", "remote-control", "tui"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: Communications :: Chat",
+    "Topic :: System :: Shells",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+# 라우터 데몬 (pm2 로 실행)
+btg-router = "imadhd.cli:router_main"
+# CC SessionStart 훅
+btg-register = "imadhd.cli:register_main"
+# CC Stop 훅
+btg-reply = "imadhd.cli:reply_main"
+
+[tool.setuptools.packages.find]
+include = ["imadhd*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

@@ -1,0 +1,36 @@
+# ===== Secrets (절대 커밋 금지) =====
+.env
+*.env
+secrets.*
+!.env.example
+!*.env.example
+
+# ===== Runtime state =====
+registry.json
+offset.txt
+*.runtime.json
+data/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== OS =====
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
