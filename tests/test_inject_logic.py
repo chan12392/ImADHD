@@ -33,7 +33,7 @@ def test_inject_dead_terminal_releases_slot(tmp_path):
     cmd.handle(Message("42", "1️⃣ hi", {}), ctx)
     assert tr.injected is None                       # not injected
     assert reg.get(1) is None                         # slot released
-    assert any("꺼짐" in t for _, t in tg.sent)
+    assert any("종료" in t for _, t in tg.sent)
 
 
 def test_inject_alive_injects_with_marker(tmp_path):
@@ -45,7 +45,7 @@ def test_inject_alive_injects_with_marker(tmp_path):
     assert tr.injected is not None
     _, text = tr.injected
     assert "do work" in text and "텔레그램으로 답변" in text
-    assert any("📩" in t for _, t in tg.sent)
+    assert "\n" not in text                           # 한 줄 주입 (분할 방지)
 
 
 def test_inject_unknown_number(tmp_path):
