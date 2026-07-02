@@ -356,11 +356,14 @@ baekho-tg/                          # 레포 루트 (git private)
 2. **ReplyKeyboard 활성 갱신**: 핀 메시지를 `editMessageText`(본문+markup)로 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
 3. **버튼 클릭 메시지 잔류**: `1️⃣.⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
 4. **대기 상태 비가시성**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됨. 토글/교체 흐름이므로 메모리 기준. (필요시 보드 텍스트에 대기 번호 하이라이트 검토 가능.)
+5. **router 재시작 시 핀 메시지 옛날 고정(수정 2026-07-03)**: `PinBoard.__init__`이 저장된 핀 msg_id를 신뢰해 `_last_key`를 현재 active 상태로 세팅했음. registry active가 안정적(변화 없음)이면 refresh_if_changed가 edit 스킵 → 핀 메시지가 router 시작 전 옛날 상태(❌ 6개)로 영정 고정. "다른 CC 열었는데 이모지 안 바뀜" 증상.
+   - **수정**: `__init__`에서 msg_id 있어도 `_last_key=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화. `edit_message_text`가 400 "not modified"를 catch하므로 불필요 edit도 안전.
 
 ### 12.8 라이브 검증 체크리스트
 
 - [x] 기존 인라인 핀(#147) → ReplyKeyboard(#154) 교체 (repin.py)
 - [x] 47/47 테스트 통과 (선택모드 pending + 토글(취소/교체) + do_inject + 보드 ReplyKeyboard/핀/실시간)
+- [x] router 재시작 시 핀 옛날 고정 버그 수정(`_last_key=None` 강제 동기화, 2026-07-03)
 - [x] pm2 `imadhd` 재시작 정상 기동 (에러 없음)
 - [x] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 버튼 클릭 후 본문 시 주입 정상 (2026-07-03 라이브 — "잘 보여" 본문이 선택모드로 정상 주입됨 확인)
 - [ ] 터미널 on-off 시 마크(⭕❌) 자동 변경 확인 (대기)
