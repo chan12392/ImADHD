@@ -72,11 +72,11 @@ class PinBoard:
         return "  ".join(parts)
 
     def keyboard_markup(self) -> dict:
-        """ReplyKeyboard: 번호만 버튼(상태마크 없음 → 고정). 클릭=번호 메시지 전송."""
+        """ReplyKeyboard: 번호+'.' 버튼(본문 `1️⃣.⭕` 포맷과 시작 일치). 클릭=`1️⃣.` 메시지."""
         rows, row = [], []
         for n in range(1, self.max_slots + 1):
             emoji = NUM_EMOJI.get(n, f"{n}")
-            row.append({"text": emoji})
+            row.append({"text": f"{emoji}."})
             if len(row) >= COLS:
                 rows.append(row)
                 row = []

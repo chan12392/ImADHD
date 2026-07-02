@@ -401,6 +401,11 @@ baekho-tg/                          # 레포 루트 (git private)
 
 **리스크**: Markdown V1 미지원 문법(`# 제목`, `- 리스트` plain 처리). V2(이스케이프 엄격) 대안 있으나 400 위험 커 V1 채택.
 
+**V1 → HTML 전환 (수정 2026-07-03)**: V1 채택 후에도 **코드펜스(```)** 미지원 확인. 답장에 코드블록/명령어 코드펜스 포함 시 V1 400 → plain 폴백 → "마크다운 안 됨" 증상 재발.
+- **해결**: `parse_mode="HTML"` + `imadhd/reply/markup.py::md_to_tg_html()` 변환 도입. 마크다운(`**굵게**`, `` `inline` ``, ```펜스```) → Telegram HTML(`<b>`, `<code>`, `<pre><code>`). 코드 블록은 sentinel 치환(private use area)으로 내부 `* & < >` 보호 — 코드 안의 `**`가 굵게로 오해되지 않음.
+- `reply_hook.py`: `md_to_tg_html(msg)` → `parse_mode="HTML"`. 변환/전송 실패 시 plain 폴백 유지.
+- HTML 모드 이스케이프는 `& < >` 만이라 400 위험 최소, 코드펜스 지원 → V1보다 견고.
+
 ### 12.11 본문·버튼 분리 — 단일 핀 메시지 실시간 갱신 (최종 아키텍처, 추가 2026-07-03)
 
 대표님 요청: "고정된 걸 계속 지웠다 다시 고정하지 말고, 한 번 고정한 걸 그냥 갱신."
@@ -425,9 +430,24 @@ baekho-tg/                          # 레포 루트 (git private)
 - 속성: `status_id`/`keyboard_id` + 영구 저장 파일 2개(`pin_message_id.txt`=본문, `keyboard_message_id.txt`).
 - `create()`: status send(markup 없음→핀) + keyboard send(ReplyKeyboard).
 - `refresh_if_changed(pending_num)`: 본문만 editMessageText(markup 없음). `_last_text`로 변경 감지(동일 시 skip, 400 방지). edit 예외(본문 무효) 시에만 `repin()`.
-- `keyboard_markup()`: 버튼 텍스트 = 번호이모지만(상태마크 없음). 고정.
+- `keyboard_markup()`: 버튼 텍스트 = 번호이모지+'.'(본문 `1️⃣.⭕` 시작과 일치, 상태마크 없음). 고정.
 - `repin.py`: `msg_id` → `status_id`/`keyboard_id` 출력으로 수정.
 
 **검증(2026-07-03 라이브)**: pm2 재시작 후 자동 repin 1회(status_id=222, keyboard_id=224 생성). 이후 error.log 400 없음. 222 직접 editMessageText → ok=True. 분리 구조 정상 작동, repin 루프 해소.
 
 **트레이드오프**: 메시지 2건 사용(본문+버튼). 본문 edit = 무한 갱신 가능, 버튼 고정 = 상태 표시 불가(상태는 본문으로). 대표님 "갱신만, 삭제/재고정 금지" 요구 정확히 부합.
+
+### 12.12 pm2 부팅 자동시작 + 버튼 점 (추가 2026-07-03)
+
+대표님 요청: "pm2 컴퓨터 재부팅해도 자동으로 되게" + "인라인 버튼 이모지 뒤에 . 하나만."
+
+**pm2 자동시작 (Windows)**:
+- 도구: `pm2-windows-startup@1.0.3` (npm global).
+- 등록 절차: `pm2 save`(현재 imadhd → `~/.pm2/dump.pm2`) → `pm2-startup install`.
+- 결과: HKCU `Software\Microsoft\Windows\CurrentVersion\Run` `PM2` 키 = `wscript.exe invisible.vbs pm2_resurrect.cmd`. 로그온 시 자동 `pm2 resurrect` → dump에서 imadhd 부활.
+- (주의) 작업스케줄러가 아니라 **레지스트리 Run 키** 방식. `schtasks`엔 안 보임(정상). dump에 imadhd 포함되어 있어야 부활 → 프로세스 목록 바뀌면 `pm2 save` 재실행.
+
+**버튼 점 포맷** (`pin_board.keyboard_markup`):
+- 버튼 텍스트 `1️⃣` → `1️⃣.`. 본문 `1️⃣.⭕` 시작 포맷과 일치(시인성/통일).
+- 클릭 시 전송 `1️⃣.` → `inject_command.handle`: 이모지 제거 후 `body="."` → `clean=body.replace(".","").strip()=""` → 선택모드 pending 분기. 기존 파싱 로직 호환(코드 변경 불필요).
+- 포맷 변경은 keyboard_msg 재생성 필요 → `repin.py` 1회 실행으로 적용(status_id=239, keyboard_id=241). 운영 중엔 재발 안 함(버튼 고정).

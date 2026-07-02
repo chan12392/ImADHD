@@ -62,10 +62,10 @@ def test_create_sends_status_and_keyboard(tmp_path):
 
 
 def test_keyboard_markup_numbers_only(tmp_path):
-    """버튼은 번호만(상태마크 없음) → 고정. 클릭=번호 메시지."""
+    """버튼은 번호+'.'(본문 포맷과 시작 일치, 상태마크 없음 → 고정). 클릭=`1️⃣.`."""
     board, _ = _board(tmp_path)
     kb = board.keyboard_markup()["keyboard"]
-    assert kb[0][0]["text"] == NUM_EMOJI[1]             # 번호만
+    assert kb[0][0]["text"] == NUM_EMOJI[1] + "."       # 번호 + 점
     assert "⭕" not in kb[0][0]["text"]
     assert "callback_data" not in kb[0][0]
 

@@ -27,6 +27,7 @@ def main() -> int:
     from ..config import Settings
     from ..core.registry import JSONFileRegistry
     from ..reply.marker_capture import MarkerCapture, ReplyPayload
+    from ..reply.markup import md_to_tg_html
     from ..commands.inject_command import EMOJI_TO_NUM
     from ..telegram_api.client import TelegramClient
 
@@ -50,9 +51,11 @@ def main() -> int:
         return 0
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
     msg = f"{emoji} {body}".strip()
-    # 마크다운 렌더(코드블록/굵게/리스트). 파싱 실패(이스케이프 누락 400) 시 plain 폴백.
+    # 마크다운 → Telegram HTML 렌더(코드블록/굵게/이탤릭). Markdown V1 은 코드펜스
+    # 미지원 → 400 → plain 폴백 되는 문제 해결. HTML 모드 + md_to_tg_html 변환.
+    # 변환/전송 실패 시 plain 폴백.
     try:
-        tg.send(s.allowed_chat_id, msg, parse_mode="Markdown")
+        tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
     except Exception:
         tg.send(s.allowed_chat_id, msg)
     return 0
