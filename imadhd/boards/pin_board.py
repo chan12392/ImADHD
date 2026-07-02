@@ -1,7 +1,7 @@
 """텔레그램 상태 보드: ReplyKeyboard(입력창 아래 영구 버튼).
 
-출력(버튼): 1️⃣⭕ 2️⃣❌ 3️⃣📝 4️⃣❌ 5️⃣❌ 6️⃣❌  (3열 그리드)
-상태: ⭕ 연결(idle) / ❌ 종료(빈 슬롯) / 📝 작업중(busy)
+출력(버튼): 1️⃣.⭕ 2️⃣.❌ 3️⃣.📝 4️⃣.❌ 5️⃣.❌ 6️⃣.❌  (3열 그리드)
+상태: ⏳ 선택대기(pending) / 📝 작업중(busy) / ⭕ 연결(idle) / ❌ 종료(빈 슬롯)
 
 ReplyKeyboard 특징:
   - 입력창 아래 상시(스크롤에 안 묻힘). 핀 아님.
@@ -40,6 +40,8 @@ class PinBoard:
         # 버그 방지(registry active 는 안정이라 key 같으면 edit 스킵 → 핀 방치).
         # edit_message_text 가 400 "not modified" 를 잡으므로 불필요 edit도 안전.
         self._last_key: tuple | None = None
+        # 선택대기(pending) 번호: 해당 슬롯 마크 ⏳ 로 표시. None=대기 없음.
+        self.pending_num: int | None = None
 
     def _load_id(self) -> int | None:
         try:
@@ -51,19 +53,22 @@ class PinBoard:
         self.id_file.parent.mkdir(parents=True, exist_ok=True)
         self.id_file.write_text(str(mid), encoding="utf-8")
 
+    def _mark_for(self, info, num: int) -> str:
+        """슬롯 마크 우선순위: ⏳ 선택대기 > 📝 작업중 > ⭕ 연결 > ❌ 종료."""
+        if self.pending_num == num:
+            return "⏳"
+        if not info:
+            return "❌"
+        if info.status == "busy":
+            return "📝"
+        return "⭕"
+
     def status_text(self) -> str:
         act = {i.number: i for i in self.reg.active()}
         parts = []
         for n in range(1, self.max_slots + 1):
-            info = act.get(n)
             emoji = NUM_EMOJI.get(n, f"[{n}]")
-            if not info:
-                mark = "❌"
-            elif info.status == "busy":
-                mark = "📝"
-            else:
-                mark = "⭕"
-            parts.append(f"{emoji}.{mark}")
+            parts.append(f"{emoji}.{self._mark_for(act.get(n), n)}")
         return "  ".join(parts)
 
     def status_markup(self) -> dict:
@@ -71,15 +76,8 @@ class PinBoard:
         act = {i.number: i for i in self.reg.active()}
         rows, row = [], []
         for n in range(1, self.max_slots + 1):
-            info = act.get(n)
             emoji = NUM_EMOJI.get(n, f"{n}")
-            if not info:
-                mark = "❌"
-            elif info.status == "busy":
-                mark = "📝"
-            else:
-                mark = "⭕"
-            row.append({"text": f"{emoji}.{mark}"})
+            row.append({"text": f"{emoji}.{self._mark_for(act.get(n), n)}"})
             if len(row) >= COLS:
                 rows.append(row)
                 row = []
@@ -102,9 +100,10 @@ class PinBoard:
             self._save_id(mid)
             self.tg.pin_chat_message(self.chat, mid)   # 상단 핀 고정
 
-    def refresh_if_changed(self) -> None:
+    def refresh_if_changed(self, pending_num: int | None = None) -> None:
         if not self.msg_id:
             return
+        self.pending_num = pending_num   # 선택대기 번호 반영(⏳)
         text = self.status_text()
         markup = self.status_markup()
         key = self._key(text, markup)

@@ -43,11 +43,14 @@ class TelegramClient:
             self._save_offset(result[-1].get("update_id", 0) + 1)
         return result
 
-    def send(self, chat_id: str, text: str, reply_markup: dict | None = None) -> int | None:
-        """메시지 전송. 반환=message_id (pin 용). reply_markup=인라인 키보드."""
+    def send(self, chat_id: str, text: str, reply_markup: dict | None = None,
+             parse_mode: str | None = None) -> int | None:
+        """메시지 전송. 반환=message_id (pin 용). reply_markup=키보드. parse_mode='Markdown'|'HTML'."""
         if not chat_id:
             return None
         data = {"chat_id": chat_id, "text": text}
+        if parse_mode:
+            data["parse_mode"] = parse_mode
         if reply_markup:
             data["reply_markup"] = reply_markup
         resp = self._api("sendMessage", data, timeout=10)

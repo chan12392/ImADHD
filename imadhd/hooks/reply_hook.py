@@ -49,7 +49,12 @@ def main() -> int:
     if not s.allowed_chat_id:
         return 0
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
-    tg.send(s.allowed_chat_id, f"{emoji} {body}".strip())
+    msg = f"{emoji} {body}".strip()
+    # 마크다운 렌더(코드블록/굵게/리스트). 파싱 실패(이스케이프 누락 400) 시 plain 폴백.
+    try:
+        tg.send(s.allowed_chat_id, msg, parse_mode="Markdown")
+    except Exception:
+        tg.send(s.allowed_chat_id, msg)
     return 0
 
 

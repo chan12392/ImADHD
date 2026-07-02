@@ -38,6 +38,11 @@ def run(settings: "Settings") -> None:
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
 
+    def _pending_num() -> int | None:
+        """현재 선택대기 번호(단일 채팅). None=대기 없음."""
+        p = ctx.pending.get(str(settings.allowed_chat_id))
+        return p[0] if p else None
+
     log.info("router start: slots=%d data_dir=%s", settings.max_slots, settings.data_dir)
     try:
         board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
@@ -52,7 +57,7 @@ def run(settings: "Settings") -> None:
             after = {i.number for i in reg.active()}
             for n in sorted(before - after):
                 tg.send(settings.allowed_chat_id, f"❌ {n}번 터미널 종료")
-            board.refresh_if_changed()
+            board.refresh_if_changed(pending_num=_pending_num())
         except Exception as e:
             log.warning("sweep/board error: %s", e)
 
@@ -84,7 +89,7 @@ def run(settings: "Settings") -> None:
                         del ctx.pending[str(chat)]
                         try:
                             do_inject(ctx, pnum, text, str(chat))
-                            board.refresh_if_changed()
+                            board.refresh_if_changed(pending_num=None)   # 주입 완료 → 📝
                             handled = True
                         except Exception as e:
                             log.exception("pending inject failed: %s", e)
@@ -95,7 +100,7 @@ def run(settings: "Settings") -> None:
                     try:
                         if cmd.match(msg):
                             cmd.handle(msg, ctx)
-                            board.refresh_if_changed()
+                            board.refresh_if_changed(pending_num=_pending_num())
                             break
                     except Exception as e:
                         log.exception("command %s failed: %s", type(cmd).__name__, e)

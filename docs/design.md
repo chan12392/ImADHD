@@ -355,7 +355,7 @@ baekho-tg/                          # 레포 루트 (git private)
    - 완화: TTL 300초(5분). 클릭 직후 바로 본문 치는 흐름 권장. **취소 토글**(같은 번호 재클릭)로 의도치 않은 대기 해제 가능.
 2. **ReplyKeyboard 활성 갱신**: 핀 메시지를 `editMessageText`(본문+markup)로 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
 3. **버튼 클릭 메시지 잔류**: `1️⃣.⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
-4. **대기 상태 비가시성**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됨. 토글/교체 흐름이므로 메모리 기준. (필요시 보드 텍스트에 대기 번호 하이라이트 검토 가능.)
+4. **대기 상태 비가시성(해소 2026-07-03)**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됐음. → **⏳ 시각화** 추가(12.9).
 5. **router 재시작 시 핀 메시지 옛날 고정(수정 2026-07-03)**: `PinBoard.__init__`이 저장된 핀 msg_id를 신뢰해 `_last_key`를 현재 active 상태로 세팅했음. registry active가 안정적(변화 없음)이면 refresh_if_changed가 edit 스킵 → 핀 메시지가 router 시작 전 옛날 상태(❌ 6개)로 영정 고정. "다른 CC 열었는데 이모지 안 바뀜" 증상.
    - **수정**: `__init__`에서 msg_id 있어도 `_last_key=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화. `edit_message_text`가 400 "not modified"를 catch하므로 불필요 edit도 안전.
 
@@ -368,3 +368,32 @@ baekho-tg/                          # 레포 루트 (git private)
 - [x] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 버튼 클릭 후 본문 시 주입 정상 (2026-07-03 라이브 — "잘 보여" 본문이 선택모드로 정상 주입됨 확인)
 - [ ] 터미널 on-off 시 마크(⭕❌) 자동 변경 확인 (대기)
 - [ ] 대기 토글(같은 번호 재클릭=취소 / 다른 번호=교체) 라이브 확인 (대기)
+
+### 12.9 ⏳ 선택대기 시각화 (추가 2026-07-03)
+
+대표님 요청: "번호 눌렀을 때 해당 번호 ⏳, 지시 넣으면 📝, 다른 번호 누르면 ⏳ 이동."
+
+**마크 우선순위** (`PinBoard._mark_for`): `⏳ pending > 📝 busy > ⭕ idle > ❌ dead`.
+
+- 버튼 클릭 → `ctx.pending[num]` 등록 → router `refresh_if_changed(pending_num=num)` → 핀 해당 슬롯 ⏳.
+- 다른 번호 클릭 → pending 교체 → ⏳ 이동(이전 번호는 active idle → ⭕ 자동 복귀).
+- 본문 주입(`do_inject`) → registry busy + pending 소비 → `refresh(pending_num=None)` → 📝.
+- 같은 번호 재클릭 → pending 취소 → ⏳ 제거.
+
+**변경**:
+- `PinBoard.pending_num` 속성 + `_mark_for(info, num)` 헬퍼(status_text/markup 공용).
+- `refresh_if_changed(pending_num=None)` — 매 호출마다 pending 반영.
+- router: `_pending_num()` 헬퍼로 현재 pending 읽어 sweep/cmd 후 refresh에 전달. pending 주입 후엔 `None`.
+
+### 12.10 마크다운 렌더 (추가 2026-07-03)
+
+대표님 요청: "너가 보내는 DM에 마크다운 문법 적용 안 되는데 수정."
+
+**원인**: 텔레그램 sendMessage 호출에 `parse_mode` 없음 → plain text 렌더(코드블록/굵게 미작동).
+
+**변경** (`parse_mode="Markdown"`, V1 — GFM 호환, 이스케이프 느슨):
+- ImADHD `client.send(chat, text, reply_markup, parse_mode)` — 파라미터 추가(기본 None). 핀/알림은 plain 유지(이모지+점이라 마크다운 불필요, 안전).
+- ImADHD `reply_hook.py` 답장 전송: `parse_mode="Markdown"` + **실패 시 plain 폴백**(이스케이프 누락 400 방어).
+- 백호 본체 `~/.claude/scripts/baekho-tg-reply.py` 동일 패턴(같은 봇 토큰, 폴백 경로). chunk 분할 시 코드블록 경계 잘림 가능(장문은 한 메시지 권장).
+
+**리스크**: Markdown V1 미지원 문법(`# 제목`, `- 리스트` plain 처리). V2(이스케이프 엄격) 대안 있으나 400 위험 커 V1 채택.
