@@ -27,7 +27,9 @@ class PinBoard:
         self.max_slots = max_slots
         self.id_file = Path(data_dir) / "pin_message_id.txt"
         self.msg_id = self._load_id()
-        self._last_text: str | None = None
+        # 시작 시 현재 status_text 로 초기화 → 첫 refresh_if_changed 가
+        # 핀 실제와 동일하면 edit 안 함 ("not modified" 400 회피).
+        self._last_text: str | None = self.status_text() if self.msg_id else None
 
     def _load_id(self) -> int | None:
         try:

@@ -37,7 +37,10 @@ def run(settings: "Settings") -> None:
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
 
     log.info("router start: slots=%d data_dir=%s", settings.max_slots, settings.data_dir)
-    board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
+    try:
+        board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
+    except Exception as e:
+        log.warning("init board refresh failed: %s", e)
 
     while True:
         # 감시: 죽은 슬롯 정리 + 종료 알림 + 공지 갱신
