@@ -66,9 +66,16 @@ class TelegramClient:
         try:
             self._api("editMessageText", data, timeout=10)
         except urllib.error.HTTPError as e:
-            # 400 "message is not modified" = 내용 동일(정상). 핀 갱신은 best-effort.
-            if e.code != 400:
-                raise
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "ignore")
+            except Exception:
+                pass
+            # "not modified"(내용 동일, 정상)만 삼킴. 그 외 400(can't be edited/
+            # not found = 핀 무효)는 raise → 상위(PinBoard)에서 repin 유도.
+            if e.code == 400 and "not modified" in body:
+                return
+            raise
 
     def edit_message_reply_markup(self, chat_id: str, message_id: int,
                                   reply_markup: dict | None) -> None:

@@ -357,7 +357,9 @@ baekho-tg/                          # 레포 루트 (git private)
 3. **버튼 클릭 메시지 잔류**: `1️⃣.⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
 4. **대기 상태 비가시성(해소 2026-07-03)**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됐음. → **⏳ 시각화** 추가(12.9).
 5. **router 재시작 시 핀 메시지 옛날 고정(수정 2026-07-03)**: `PinBoard.__init__`이 저장된 핀 msg_id를 신뢰해 `_last_key`를 현재 active 상태로 세팅했음. registry active가 안정적(변화 없음)이면 refresh_if_changed가 edit 스킵 → 핀 메시지가 router 시작 전 옛날 상태(❌ 6개)로 영정 고정. "다른 CC 열었는데 이모지 안 바뀜" 증상.
-   - **수정**: `__init__`에서 msg_id 있어도 `_last_key=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화. `edit_message_text`가 400 "not modified"를 catch하므로 불필요 edit도 안전.
+   - **수정**: `__init__`에서 msg_id 있어도 `_last_key=None`. 첫 refresh_if_changed가 무조건 edit 시도 → 핀을 현재 상태로 강제 동기화.
+6. **핀 메시지 무효(edit 불가) 시 자동 repin(수정 2026-07-03)**: 핀 msg_id가 삭제/무효되면 editMessageText 400 "message can't be edited" 반환. 기존엔 모든 400을 catch해 조용히 실패 → 핀 영정("모래시계 안 바뀜"/"2번 ❌ 유지" 증상).
+   - **수정**: `client.edit_message_text`가 400 중 "not modified"(내용 동일, 정상)만 catch, 그 외("can't be edited"/"not found")는 raise. `PinBoard.refresh_if_changed`가 edit 예외 시 자동 `repin()`(구 핀 delete + 새 메시지 생성+핀). 핀이 삭제돼도 다음 refresh에 자가복구.
 
 ### 12.8 라이브 검증 체크리스트
 

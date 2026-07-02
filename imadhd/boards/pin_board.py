@@ -108,9 +108,13 @@ class PinBoard:
         markup = self.status_markup()
         key = self._key(text, markup)
         if key != self._last_key:
-            # 핀 메시지 본문(text) + 키보드(markup) 둘 다 실시간 갱신
-            self.tg.edit_message_text(self.chat, self.msg_id, text, reply_markup=markup)
-            self._last_key = key
+            # 핀 메시지 본문(text) + 키보드(markup) 둘 다 실시간 갱신.
+            # edit 실패(can't be edited/not found = 핀 무효·삭제됨) → 자동 repin.
+            try:
+                self.tg.edit_message_text(self.chat, self.msg_id, text, reply_markup=markup)
+                self._last_key = key
+            except Exception:
+                self.repin()   # 새 핀 생성(새 msg_id). _last_key는 repin이 갱신.
 
     def repin(self) -> None:
         """기존 보드 메시지 삭제 후 새로 생성(포맷/버전 변경 시 교체용)."""

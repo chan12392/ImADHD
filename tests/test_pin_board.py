@@ -122,3 +122,22 @@ def test_refresh_propagates_pending_then_clears(tmp_path):
     assert len(board.tg.edited) == 1
     _c, _m, text, _mk = board.tg.edited[-1]
     assert f"{NUM_EMOJI[1]}.⭕" in text
+
+
+def test_refresh_repins_on_edit_failure(tmp_path):
+    """핀 edit 실패(can't be edited/not found=무효) → 자동 repin(새 메시지)."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")
+    board.create()
+    old_mid = board.msg_id
+    sent_before = len(board.tg.sent)
+
+    def boom(*a, **k):
+        raise RuntimeError("400 can't be edited")
+    board.tg.edit_message_text = boom
+
+    reg.set_status(1, "busy")
+    board.refresh_if_changed()                          # edit 실패 → repin
+    assert len(board.tg.sent) == sent_before + 1        # 새 메시지 생성
+    assert board.msg_id != old_mid                      # msg_id 교체
+    assert board.tg.pinned[-1] == board.msg_id          # 새 핀 고정
