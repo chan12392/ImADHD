@@ -18,21 +18,23 @@ from pathlib import Path
 
 
 def _capture_terminal() -> tuple[int, int]:
-    """이 프로세스의 콘솔 창(= CC 터미널) HWND 와 소유 PID 반환.
+    """CC 터미널 창 HWND 와 소유 PID 반환.
 
-    GetConsoleWindow() 가 훅을 spawn 한 CC 콘솔 창을 가리킴(자식은 부모 콘솔 공유).
-    콘솔 없는 환경→포그라운드 폴백, 최후 os.getpid().
+    CC 가 훅을 detached 로 spawn → 훅에겐 콘솔 없음(GetConsoleWindow=0).
+    따라서 포그라운드 우선: SessionStart 동기 실행 시 포그라운드=CC 터미널.
+    폴백: GetConsoleWindow. 최후 os.getpid().
     """
     try:
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
         user32.GetConsoleWindow.restype = wintypes.HWND
         user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         user32.GetWindowThreadProcessId.restype = wintypes.DWORD
-        hwnd = user32.GetConsoleWindow() or 0
+        hwnd = user32.GetForegroundWindow() or 0
         if not hwnd:
-            hwnd = user32.GetForegroundWindow() or 0
+            hwnd = user32.GetConsoleWindow() or 0
         if not hwnd:
             return 0, os.getpid()
         pid = wintypes.DWORD()
