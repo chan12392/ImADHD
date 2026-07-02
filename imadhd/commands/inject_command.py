@@ -51,10 +51,9 @@ class InjectCommand(Command):
         body = msg.text[len(leading_emoji(msg.text)):].strip() or "(빈 입력)"
         # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
         body = " ".join(body.split())
-        inject_text = (
-            f"{body}  [텔레그램에서 온 요청. 1~2문장으로 짧게 답하고 "
-            f"답변 끝에 '{ctx.settings.reply_marker}' 출력]"
-        )
+        # 마커는 CLAUDE.md 규칙 트리거([텔레그램에서 온 요청])만.
+        # CC 규칙이 자동으로 "1~2문장 짧게 답 + 끝에 텔레그램으로 답변 출력" 수행.
+        inject_text = f"{body} [텔레그램에서 온 요청]"
         ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
         ctx.transport.inject(target, inject_text)
 
