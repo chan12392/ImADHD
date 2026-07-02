@@ -63,10 +63,34 @@ def test_button_click_sets_pending_no_inject(tmp_path):
     reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
     tg, tr = FakeTG(), FakeTransport(alive=True)
     ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
-    InjectCommand().handle(Message("42", "1️⃣⭕", {}), ctx)
+    InjectCommand().handle(Message("42", "1️⃣.⭕", {}), ctx)
     assert tr.injected is None              # 주입 안 됨
     assert tg.sent == []                    # 안내 메시지 생략
     assert ctx.pending.get("42", (None,))[0] == 1
+
+
+def test_button_click_same_again_cancels(tmp_path):
+    """같은 번호 재클릭 → 대기 취소."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    InjectCommand().handle(Message("42", "1️⃣.⭕", {}), ctx)
+    assert ctx.pending["42"][0] == 1
+    InjectCommand().handle(Message("42", "1️⃣.⭕", {}), ctx)   # 같은 번호 → 취소
+    assert "42" not in ctx.pending
+
+
+def test_button_click_different_switches(tmp_path):
+    """다른 번호 클릭 → 대기 번호 교체."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    reg.claim_slot("s2", hwnd=2, pid=2, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    InjectCommand().handle(Message("42", "1️⃣.⭕", {}), ctx)
+    InjectCommand().handle(Message("42", "2️⃣.⭕", {}), ctx)   # 다른 번호 → 교체
+    assert ctx.pending["42"][0] == 2
 
 
 def test_do_inject_consumes_body(tmp_path):
