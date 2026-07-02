@@ -16,5 +16,14 @@ class MarkerCapture(ReplyStrategy):
         return self.marker in (payload.assistant_text or "")
 
     def build_text(self, payload: ReplyPayload) -> str:
-        # TODO: 마커 및 마커 이후 줄 제거
-        raise NotImplementedError("implemented in plan step")
+        text = payload.assistant_text or ""
+        lines = text.splitlines()
+        out = []
+        for line in lines:
+            if self.marker in line:
+                before = line.split(self.marker)[0].rstrip()
+                if before:
+                    out.append(before)
+                break
+            out.append(line)
+        return "\n".join(out).strip()

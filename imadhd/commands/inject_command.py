@@ -28,3 +28,23 @@ class InjectCommand(Command):
 
 def _starts_with_num_emoji(text: str) -> bool:
     return any(text.startswith(e) for e in EMOJI_TO_NUM)
+
+
+def parse_leading_number(text):
+    """선두 숫자이모지 → int. 없으면 None."""
+    if not text:
+        return None
+    for emoji, n in EMOJI_TO_NUM.items():
+        if text.startswith(emoji):
+            return n
+    return None
+
+
+def leading_emoji(text):
+    """선두 숫자이모지 문자열 반환. 없으면 ''."""
+    if not text:
+        return ""
+    for emoji in EMOJI_TO_NUM:
+        if text.startswith(emoji):
+            return emoji
+    return ""
