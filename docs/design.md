@@ -251,3 +251,104 @@ baekho-tg/                          # 레포 루트 (git private)
 - HWND 캡처 타이밍: SessionStart 실행 시점과 실제 터미널 창 포커스 시점 차이 → prewait + 재시도 폴백.
 - 백그라운드 입력 감지 신뢰성: Windows Terminal 버전별 차이 → 실패 시 즉시 폴백 보장.
 - CC 정상 종료 감지: SessionEnd 훅 부재 → 사전체크 의존. 필요시 하트비트(각 CC 주기적 ping) 추가 가능.
+
+---
+
+## 12. 상태 보드(ReplyKeyboard) + 선택 모드
+
+> 추가: 2026-07-03. 대표님 UI 요구 진화에 따른 보드 형태 + 주입 흐름 개편.
+
+### 12.1 배경 — 보드 형태 결정 과정
+
+터미널 상태(⭕ idle / 📝 busy / ❌ dead) 시각화를 어디에 둘지 대표님 요구 진화:
+
+1. 번호+마크 형태(`1️⃣⭕ 2️⃣❌ …`) 요청 → 인라인 키보드 핀 구현(메시지 #147).
+2. "입력창 위에 영구 떠있게" → 핀(상단 고정) 배치 시도.
+3. "입력창 위 말고 사진처럼 떠야 할 듯" → 사진 재해석 요청.
+4. **"사진은 햄버거 메뉴가 아님, 입력창 아래에 통합된 버튼"** → 정정.
+   → 실제 의도 = **ReplyKeyboardMarkup**(입력창 아래 영구 커스텀 키보드, 버튼 3열 그리드).
+
+> 이미지 분석 도구(mcp `analyze_image`)는 사진을 "햄버거 사이드 메뉴 drawer"로 3회 오독. 대표님 정정으로 ReplyKeyboard 확정. **교훈: 해당 도구 신뢰 낮음, 로컬 재확인 또는 대표님 확인 우선.**
+
+### 12.2 텔레그램 API 제약 (조사 결과)
+
+대표님 후속 요구 "버튼 클릭 → 입력창에 숫자만 채우기(전송 X)":
+
+| 시도 | 결과 |
+|---|---|
+| **ReplyKeyboardMarkup** | 버튼 클릭 = 무조건 **즉시 메시지 전송**. 입력창 채우기 불가. |
+| **봇이 사용자 입력창 직접 조작** | 보안상 API 미지원 (Latenode/Telegram 문서 확인). |
+| **switch_inline_query_current_chat** | 입력창에 `@봇유저네임 <query>` 채워지나 **inline mode 진입** → 본문 전송 흐름 깨짐(결과 패널만 표시) + 봇멘션 동반. |
+
+→ "버튼 클릭 → 입력창만 채우기"는 **불가능** 확인.
+
+### 12.3 채택 — 선택 모드 (ReplyKeyboard 유지 + 흔적 최소화)
+
+대표님 결정: **ReplyKeyboard(입력창 아래) 유지 + 클릭 흔적 최소** (옵션 A).
+
+- 버튼 클릭(번호+상태마크) → **선택모드 대기**(pending) 등록. **안내 메시지 생략**.
+- 다음 본문 메시지(번호 없음) → 대기 번호로 주입(60초 TTL).
+- 버튼 클릭 시 어쩔 수 없이 `1️⃣⭕` 메시지 1줄은 채팅에 남음(ReplyKeyboard 제약). 안내 회신 생략으로 부담 최소화.
+
+### 12.4 컴포넌트 변경
+
+**PinBoard** (`imadhd/boards/pin_board.py`):
+- `status_markup()` → `{"keyboard": rows, "resize_keyboard": True}` (ReplyKeyboard). 버튼 텍스트 = `번호+상태마크`(예 `1️⃣⭕`). `callback_data` 없음.
+- `create()` → 핀 제거. 일반 `sendMessage` + `reply_markup`.
+- `refresh_if_changed()` → `editMessageReplyMarkup`(키보드만 갱신, 텍스트 고정, API 절약). 상태 변 시 마크 업데이트.
+- `repin()` → 기존 보드 메시지 delete + 재생성(포맷 교체용, `python -m scripts.repin`).
+- msg_id 영구 저장: `~/.imadhd/pin_message_id.txt`.
+
+**TelegramClient** (`imadhd/telegram_api/client.py`):
+- `edit_message_reply_markup()` 추가(editMessageReplyMarkup, 400 "not modified" 무시).
+- `get_updates()` → `allowed_updates=["message"]` 단순화(callback_query 미수신).
+
+**InjectCommand** (`imadhd/commands/inject_command.py`):
+- 버튼 클릭 감지: 본문이 상태마크(`⭕❌📝`)만 또는 빈 값 → `ctx.pending[chat]=(num, time.time())` 등록, 주입/안내 없이 return.
+- 본문 있으면 `do_inject()` 즉시 주입.
+- `do_inject(ctx, num, body, chat)` 헬퍼: alive 재체크 + 본문 정규화(한 줄, `\n` 제거) + 마커 부착 + busy 설정. router pending 주입이 함께 사용.
+- `PENDING_TTL = 60` 상수.
+
+**CommandContext** (`imadhd/commands/base.py`):
+- `pending: dict` 필드 추가(`field(default_factory=dict)`). `chat_id → (num, timestamp)`.
+
+**router** (`imadhd/core/router.py`):
+- 메시지 루프: 번호 없는 본문 + `ctx.pending` 있으면 → TTL 내 `do_inject` 주입 + pending 소비. 만료 시 pending 삭제 후 일반 명령으로 폴백.
+- callback_query 핸들러 제거(ReplyKeyboard는 callback 안 옴).
+
+### 12.5 데이터 흐름 (선택 모드)
+
+```
+[대표님] 1️⃣⭕ 버튼 클릭
+  → ReplyKeyboard: "1️⃣⭕" 메시지 즉시 전송 (채팅에 1줄 남음)
+  → router: InjectCommand.match → handle
+  → body="⭕"(상태마크) → ctx.pending["chat"]=(1, ts). 안내 생략.
+[대표님] "로그 확인해줘" (번호 없음)
+  → router: parse_leading_number=None + pending 있음 + TTL(60s) 내
+  → do_inject(ctx, 1, "로그 확인해줘", chat)
+  → CC-1 주입: "로그 확인해줘 [텔레그램에서 온 요청]"
+  → pending 소비. CC 답변 마커 → Stop 훅 회신.
+(60초 경과 본문 없음 → pending 자동 해제)
+```
+
+### 12.6 트레이드오프 결정 기록
+
+| 옵션 | 채택 | 이유 |
+|---|---|---|
+| ReplyKeyboard(입력창 아래) + 선택모드 | ✅ | 대표님 "사진=입력창 아래 영구" + "흔적 작게" 동시 만족 가능선 |
+| 인라인 핀 + callback(클릭 흔적 0) | ❌ | 채팅에 흔적 0이지만 버튼=상단 핀(입력창 아래 위배) |
+| switch_inline_query_current_chat | ❌ | inline mode 진입, 본문 전송 흐름 깨짐 |
+
+### 12.7 리스크 & 보완
+
+1. **잘못된 터미널 주입**: pending 중 본문이 의도치 않은 메시지여도 주입됨.
+   - 완화: TTL 60초로 짧게. 클릭 직후 바로 본문 치는 흐름 권장.
+2. **ReplyKeyboard 활성 갱신**: `editMessageReplyMarkup`으로 상태 마크 갱신. Telegram이 마지막 `reply_markup` 메시지를 활성 키보드로 사용 → 보드 메시지가 최신이면 갱신 보장. 라이브 검증(터미널 시작/종료 시 마크 변경) 완료 필요.
+3. **버튼 클릭 메시지 잔류**: `1️⃣⭕` 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
+
+### 12.8 라이브 검증 체크리스트
+
+- [x] 기존 인라인 핀(#147) → ReplyKeyboard(#154) 교체 (repin.py)
+- [x] 45/45 테스트 통과 (선택모드 pending + do_inject + 보드 ReplyKeyboard)
+- [x] pm2 `imadhd` 재시작 정상 기동 (에러 없음)
+- [ ] **대표님 폰 확인**: 입력창 아래 6개 버튼 표시 / 터미널 on-off 시 마크(⭕❌) 변경 / 버튼 클릭 후 본문 시 주입 정상

@@ -1,13 +1,13 @@
-"""N️⃣<본문> 명령: 숫자이모지 파싱 → 사전체크 → 주입 → ack.
+"""N️⃣ 명령: 숫자이모지 파싱 → 사전체크 → (선택모드 pending | 즉시주입).
 
-흐름:
-  1. 선두 숫자이모지(1️⃣..6️⃣) 파싱
-  2. registry 조회
-  3. transport.is_alive 사전체크 (죽었으면 슬롯 회수 + 에러 텔레그램)
-  4. ack 전송 "📩 N번 ← ..."
-  5. transport.inject (본문 + [텔레그램 요청 마커])
+두 흐름:
+  A) 버튼 클릭(번호+상태마크만): 선택모드 pending 등록 (안내 생략, 채팅 최소)
+     → router가 다음 본문 메시지를 해당 번호로 주입 (PENDING_TTL 초 내)
+  B) N️⃣<본문> 직접 타이핑: 즉시 주입
 """
 from __future__ import annotations
+
+import time
 
 from .base import Command, Message, CommandContext
 
@@ -22,11 +22,14 @@ def _debug_log(line: str) -> None:
     except Exception:
         pass
 
+
 # 숫자이모지 → 숫자 매핑 (1..6, 여유분 7..9 포함)
 EMOJI_TO_NUM = {
     "1️⃣": 1, "2️⃣": 2, "3️⃣": 3, "4️⃣": 4, "5️⃣": 5, "6️⃣": 6,
     "7️⃣": 7, "8️⃣": 8, "9️⃣": 9,
 }
+
+PENDING_TTL = 60  # 선택 대기 초과 → 자동 해제(초)
 
 
 class InjectCommand(Command):
@@ -41,21 +44,41 @@ class InjectCommand(Command):
         if not info:
             ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
             return
-        target = info.to_dict()
-        alive = ctx.transport.is_alive(target)
-        _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]} is_alive={alive}")
-        if not alive:
+        if not ctx.transport.is_alive(info.to_dict()):
             ctx.registry.release(num)
             ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료")
             return
-        body = msg.text[len(leading_emoji(msg.text)):].strip() or "(빈 입력)"
-        # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
-        body = " ".join(body.split())
-        # 마커는 CLAUDE.md 규칙 트리거([텔레그램에서 온 요청])만.
-        # CC 규칙이 자동으로 "1~2문장 짧게 답 + 끝에 텔레그램으로 답변 출력" 수행.
-        inject_text = f"{body} [텔레그램에서 온 요청]"
-        ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
-        ctx.transport.inject(target, inject_text)
+        body = msg.text[len(leading_emoji(msg.text)):].strip()
+        # A) 버튼 클릭(상태마크만/빈 본문) → 선택모드 pending (안내 생략)
+        if not body or body in {"⭕", "❌", "📝"}:
+            ctx.pending[str(msg.chat_id)] = (num, time.time())
+            _debug_log(f"[select] num={num} pending set")
+            return
+        # B) 본문 있으면 즉시 주입
+        do_inject(ctx, num, body, msg.chat_id)
+
+
+def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
+    """주입 공통 로직: alive 재체크 + 본문 정규화 + 주입 + busy 표시.
+
+    InjectCommand(즉시 주입) 와 router(pending 본문 주입) 모두 사용.
+    """
+    info = ctx.registry.get(num)
+    if not info:
+        ctx.telegram.send(chat_id, f"❌ {num}번 터미널 없음")
+        return
+    if not ctx.transport.is_alive(info.to_dict()):
+        ctx.registry.release(num)
+        ctx.telegram.send(chat_id, f"❌ {num}번 터미널 종료")
+        return
+    _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]}")
+    # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
+    body = " ".join(body.split()) or "(빈 입력)"
+    # 마커는 CLAUDE.md 규칙 트리거([텔레그램에서 온 요청])만.
+    # CC 규칙이 자동으로 "1~2문장 짧게 답 + 끝에 텔레그램으로 답변 출력" 수행.
+    inject_text = f"{body} [텔레그램에서 온 요청]"
+    ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
+    ctx.transport.inject(info.to_dict(), inject_text)
 
 
 def _starts_with_num_emoji(text: str) -> bool:
