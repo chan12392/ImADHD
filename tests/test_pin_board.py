@@ -86,3 +86,39 @@ def test_markup_is_reply_keyboard_grid(tmp_path):
     assert "callback_data" not in btn1                # ReplyKeyboard: callback 없음
     assert f"{NUM_EMOJI[1]}.⭕" == btn1["text"]
     assert f"{NUM_EMOJI[2]}.❌" == kb[0][1]["text"]
+
+
+def test_pending_num_shows_hourglass(tmp_path):
+    """선택대기(pending) 번호 → 마크 ⏳. 본문·버튼 둘 다."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")   # 1번 idle
+    board.pending_num = 1
+    text = board.status_text()
+    assert f"{NUM_EMOJI[1]}.⏳" in text
+    markup = board.status_markup()
+    assert "⏳" in markup["keyboard"][0][0]["text"]
+
+
+def test_pending_priority_over_busy_and_idle(tmp_path):
+    """⏳(pending) > 📝(busy) > ⭕(idle). pending 번호는 busy 여도 ⏳."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")
+    reg.set_status(1, "busy")
+    board.pending_num = 1
+    assert board._mark_for(reg.get(1), 1) == "⏳"
+
+
+def test_refresh_propagates_pending_then_clears(tmp_path):
+    """refresh_if_changed(pending_num=N) → ⏳ edit. 이후 None → 원래 마크 복귀."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")
+    board.create()
+    board.refresh_if_changed(pending_num=1)            # ⏳
+    assert len(board.tg.edited) == 1
+    _c, _m, text, markup = board.tg.edited[-1]
+    assert "⏳" in text and "⏳" in markup["keyboard"][0][0]["text"]
+    board.tg.edited.clear()
+    board.refresh_if_changed(pending_num=None)         # ⏳ 해제 → ⭕
+    assert len(board.tg.edited) == 1
+    _c, _m, text, _mk = board.tg.edited[-1]
+    assert f"{NUM_EMOJI[1]}.⭕" in text
