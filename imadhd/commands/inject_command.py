@@ -23,7 +23,25 @@ class InjectCommand(Command):
         return bool(msg.text) and _starts_with_num_emoji(msg.text)
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
-        raise NotImplementedError("implemented in plan step")
+        num = parse_leading_number(msg.text)
+        if num is None:
+            return
+        info = ctx.registry.get(num)
+        if not info:
+            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
+            return
+        target = info.to_dict()
+        if not ctx.transport.is_alive(target):
+            ctx.registry.release(num)
+            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 꺼짐 → 슬롯 반납")
+            return
+        body = msg.text[len(leading_emoji(msg.text)):].strip() or "(빈 입력)"
+        ctx.telegram.send(msg.chat_id, f"📩 {num}번 ← {body[:40]}")
+        inject_text = (
+            f"{body}\n\n"
+            f"[텔레그램에서 온 요청. 답변 끝에 '{ctx.settings.reply_marker}' 출력]"
+        )
+        ctx.transport.inject(target, inject_text)
 
 
 def _starts_with_num_emoji(text: str) -> bool:
