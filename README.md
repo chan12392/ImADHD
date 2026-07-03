@@ -59,6 +59,7 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 | `boards/` | status board (pinned text + ReplyKeyboard) |
 | `hooks/register_hook.py` | CC `SessionStart`: claim a number |
 | `hooks/reply_hook.py` | CC `Stop`: capture + send reply |
+| `hooks/ask_hook.py` | CC `PreToolUse`: route `AskUserQuestion` to Telegram **inline buttons** |
 
 ## Install
 
@@ -97,10 +98,14 @@ Add to `~/.claude/settings.json`:
 {
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "btg-register" }] }],
-    "Stop":        [{ "hooks": [{ "type": "command", "command": "btg-reply"    }] }]
+    "Stop":        [{ "hooks": [{ "type": "command", "command": "btg-reply"    }] }],
+    "PreToolUse":  [{ "matcher": "AskUserQuestion",
+                      "hooks":  [{ "type": "command", "command": "btg-ask", "timeout": 300000 }] }]
   }
 }
 ```
+
+The **`PreToolUse` / `AskUserQuestion`** hook makes Claude Code's clarifying questions arrive as **Telegram inline buttons** instead of stalling in the terminal. Tap an option → the answer is fed back to Claude Code and work continues — no phone-to-terminal round-trip, no native prompt UI. If no answer arrives within the timeout, the question is denied with a reason (Claude Code can re-ask). The hook is a no-op fallback (native prompt shown) when `TELEGRAM_ALLOWED_CHAT_ID` isn't configured.
 
 Then teach Claude Code to end replies with the marker (so the `Stop` hook can route them back), e.g. in your `CLAUDE.md`:
 > When a request ends with `[A.D.H.D]`, reply tersely and print `[A.D.H.D]` as the final line.

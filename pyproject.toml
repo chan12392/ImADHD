@@ -30,6 +30,8 @@ btg-router = "imadhd.cli:router_main"
 btg-register = "imadhd.cli:register_main"
 # CC Stop 훅
 btg-reply = "imadhd.cli:reply_main"
+# CC PreToolUse 훅 (AskUserQuestion → 텔레그램 인라인 버튼)
+btg-ask = "imadhd.cli:ask_main"
 
 [tool.setuptools.packages.find]
 include = ["imadhd*"]

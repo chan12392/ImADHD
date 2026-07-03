@@ -32,8 +32,9 @@ class TelegramClient:
             return json.loads(r.read().decode("utf-8"))
 
     def get_updates(self, timeout: int = 30) -> list:
-        # message만 수신 (ReplyKeyboard 클릭 = 텍스트 메시지로 도착)
-        params = {"timeout": timeout, "allowed_updates": ["message"]}
+        # message(본문/ReplyKeyboard 클릭) + callback_query(인라인 버튼 탭) 수신.
+        # callback_query = AskUserQuestion 인라인 답변 버튼용.
+        params = {"timeout": timeout, "allowed_updates": ["message", "callback_query"]}
         offset = self._load_offset()
         if offset:
             params["offset"] = offset

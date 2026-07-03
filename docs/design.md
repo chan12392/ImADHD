@@ -113,7 +113,22 @@
   6. 해당 번호 숫자이모지를 본문 앞에 붙여 텔레그램 전송. (번호 못 찾으면 그냥 전송.)
   7. `stop_hook_active=True` 면 통과(무한루프 방지).
 
-### 4.5 send_keys transport — `imadhd/transports/sendkeys_win.py`
+### 4.5 PreToolUse 훅 — `btg-ask` (AskUserQuestion → 인라인 버튼)
+- 위치: `imadhd/hooks/ask_hook.py` (entry: `btg-ask`), 저장소 `imadhd/core/ask_manager.py`.
+- 역할: CC 가 `AskUserQuestion`(사용자에게 묻는 선택 질문) 호출 시 **네이티브 터미널 UI 대신 텔레그램 인라인 버튼**으로 질문 송신. 버튼 탭 → 답이 CC 에 `updatedInput.answers` 로 주입 → 작업 계속. (Notification 훅은 AskUserQuestion 에 안 붙으므로 PreToolUse 필수.)
+- 흐름:
+  1. PreToolUse payload `{tool_name:"AskUserQuestion", tool_input:{questions:[...]}}` 파싱.
+  2. 질문마다 1개 메시지(옵션=인라인키보드 행) 송신. `callback_data="a:<ask_id>:<item>:<opt>"`.
+  3. ask 기록 `data_dir/asks/<ask_id>.json` 작성(원자적 쓰기).
+  4. **폴링 대기**(1s 간격, 최대 `IMADHD_ASK_TIMEOUT`=280s 기본).
+     - router 가 callback_query 받아 `items[i].answer` 기록 → 전원 답 시 `status=answered`.
+  5. 답 도착 → `hookSpecificOutput.permissionDecision:"allow"` + `updatedInput={...tool_input, answers:{<질문>:<라벨>}}`. (CC 가 이 answers 를 받아 질문 해소.)
+  6. 시간초과 → `permissionDecision:"deny"` + 사유("텔레그램 응답 시간초과"). 모델이 사유 보고 다시 질문 유도.
+- 폴백: `TELEGRAM_ALLOWED_CHAT_ID` 미설정/송신 실패 → 빈 출력 → CC 네이티브 UI(사용자 차단 안 함).
+- 보안: callback 도 allowed chat 만(fail-closed). ask_id 미존재/만료/중복클릭 → 토스트만 안내, 무시.
+- 라이브 검증 필요(2026-07-03): CC 가 `updatedInput.answers` 를 실제로 AskUserQuestion 답으로 소비하는지 최초 트리거 시 확인.
+
+### 4.6 send_keys transport — `imadhd/transports/sendkeys_win.py`
 - 위치: `imadhd/transports/sendkeys_win.py`
 - 기능:
   - HWND 직접 지정 주입: 번호로 창 찾는 대신 registry 의 HWND 로 직접.
@@ -123,11 +138,11 @@
     - 추후 conpty 기반 안정 메커니즘 확보 시 백그라운드 기본 전환 검토.
 - 기본 동작 = HWND 찾아 포커스 강제 후 타이핑 (v1 기준).
 
-### 4.6 Claude Code 규칙 추가 (CLAUDE.md)
+### 4.7 Claude Code 규칙 추가 (CLAUDE.md)
 `~/.claude/CLAUDE.md` 의 절대규칙 블록에 추가:
 > **텔레그램 요청 응답 규칙**: 프롬프트에 `[A.D.H.D]` 표시가 있으면, 최종 답변의 **마지막 줄에 반드시 `[A.D.H.D]` 문구 출력**. (Stop 훅 회신 트리거.)
 
-### 4.7 봇 명령 메뉴 자동 등록 (setup)
+### 4.8 봇 명령 메뉴 자동 등록 (setup)
 `python -m imadhd adhd [bot_token]` → setMyCommands 로 봇 `/` 자동완성 메뉴 등록 (OSS 사용자 설치 후 1회).
 - `/1`~`/N`: "N번 터미널로 메시지 전송" (InjectCommand — `/N 본문`=즉시주입, `/N` 단독=pending)
 - `/list`: "활성 터미널 목록 보기" (ListCommand TRIGGERS `/list`·`/터미널` 지원)
@@ -217,10 +232,11 @@ ImADHD/                             # 레포 루트
     │   └── markup.py               # markdown → Telegram HTML 변환
     ├── hooks/                      # CC 훅 (settings.json 에서 호출)
     │   ├── register_hook.py        # SessionStart: 번호할당/HWND캡처/등록
-    │   └── reply_hook.py           # Stop: 답변 캡처/회신
+    │   ├── reply_hook.py           # Stop: 답변 캡처/회신
+    │   └── ask_hook.py             # PreToolUse: AskUserQuestion → 인라인 버튼 회신
     ├── telegram_api/
     │   └── client.py               # Bot API 래퍼 (getUpdates/sendMessage, offset 영구)
-    └── cli.py                      # entry_points: btg-router / btg-register / btg-reply
+    └── cli.py                      # entry_points: btg-router / btg-register / btg-reply / btg-ask
 ```
 
 **확장 시나리오 (기능 추가 빠르게):**
@@ -245,6 +261,7 @@ ImADHD/                             # 레포 루트
 
 - `SessionStart`: `btg-register` 추가 (matcher: startup).
 - `Stop`: `btg-reply` 추가 (기존 `channel-reply-guard.py` 유지, 별도 엔트리).
+- `PreToolUse`: `btg-ask` 추가 (matcher: `AskUserQuestion`, timeout 300000ms). 기존 `recall_hook.py`(matcher `Bash|Write|Edit`)과 **별개 엔트리** → 충돌 없음.
 - 기존 `telegram-new-command.py`(UserPromptSubmit)는 채널 래퍼 인입만 매칭 → 우리 send_keys 타이핑은 채널 래퍼 없음 → **충돌 없음, 유지**.
 
 ## 10. 구현 순서 (요약, 상세는 writing-plans)
