@@ -45,11 +45,13 @@ class TelegramClient:
         return result
 
     def send(self, chat_id: str, text: str, reply_markup: dict | None = None,
-             parse_mode: str | None = None) -> int | None:
-        """메시지 전송. 반환=message_id (pin 용). reply_markup=키보드. parse_mode='Markdown'|'HTML'."""
+             parse_mode: str | None = None, disable_notification: bool = False) -> int | None:
+        """메시지 전송. 반환=message_id (pin 용). reply_markup=키보드. parse_mode='Markdown'|'HTML'.
+        disable_notification=True → 무음 전송(연결/종료 자동 알림용, 기기 알람 없음)."""
         if not chat_id:
             return None
-        data = {"chat_id": chat_id, "text": text}
+        data = {"chat_id": chat_id, "text": text,
+                "disable_notification": bool(disable_notification)}
         if parse_mode:
             data["parse_mode"] = parse_mode
         if reply_markup:

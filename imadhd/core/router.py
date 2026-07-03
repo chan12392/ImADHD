@@ -26,6 +26,9 @@ def run(settings: "Settings") -> None:
     from ..commands.list_command import ListCommand
     from ..commands.pin_command import PinCommand
     from ..commands.new_command import NewCommand
+    from ..commands.open_command import OpenCommand
+    from ..commands.close_command import CloseCommand
+    from ..commands.stop_command import StopCommand
     from ..commands.help_command import HelpCommand
     from ..boards.pin_board import PinBoard
 
@@ -36,8 +39,12 @@ def run(settings: "Settings") -> None:
     transport = make_transport(settings.transport)
     board = PinBoard(tg, reg, settings.allowed_chat_id, settings.data_dir, settings.max_slots)
     # 매칭 순서 주의: InjectCommand(번호/슬래시N) 는 가장 관대 → 마지막.
-    # /list /pin /new /help 전용 핸들러가 먼저 매칭되도록 앞에 둠.
-    commands = [PinCommand(board), ListCommand(), NewCommand(), HelpCommand(), InjectCommand()]
+    # /list /pin /new /open /close /stop /help 전용 핸들러가 먼저 매칭되도록 앞에 둠.
+    commands = [
+        PinCommand(board), ListCommand(), NewCommand(),
+        OpenCommand(), CloseCommand(), StopCommand(),
+        HelpCommand(), InjectCommand(),
+    ]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
@@ -131,13 +138,10 @@ def run(settings: "Settings") -> None:
         log.warning("init board refresh failed: %s", e)
 
     while True:
-        # 감시: 죽은 슬롯 정리 + 종료 알림 + 공지 갱신
+        # 감시: 죽은 슬롯 정리 + 공지 갱신.
+        # 종료 알림은 채팅이 지저분해져 생략(상태 보드/​핀 + /list 로 확인).
         try:
-            before = {i.number for i in reg.active()}
             reg.sweep_dead(alive_fn)
-            after = {i.number for i in reg.active()}
-            for n in sorted(before - after):
-                tg.send(settings.allowed_chat_id, f"❌ {n}번 터미널 종료")
             board.refresh_if_changed(pending_num=_pending_num())
         except Exception as e:
             log.warning("sweep/board error: %s", e)

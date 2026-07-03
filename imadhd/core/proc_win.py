@@ -74,6 +74,28 @@ user32.GetWindow.restype = wintypes.HWND
 user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
 user32.GetClassNameW.restype = ctypes.c_int
 user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+user32.IsWindow.argtypes = [wintypes.HWND]
+user32.IsWindow.restype = wintypes.BOOL
+
+
+def window_title(hwnd: int) -> str:
+    """창 제목 반환. /list 표시용. 실패/빈칸→''."""
+    try:
+        hwnd = int(hwnd or 0)
+        if not hwnd or not user32.IsWindow(hwnd):
+            return ""
+        n = user32.GetWindowTextLengthW(hwnd)
+        if n <= 0:
+            return ""
+        buf = ctypes.create_unicode_buffer(n + 1)
+        user32.GetWindowTextW(hwnd, buf, n + 1)
+        return (buf.value or "").strip()
+    except Exception:
+        return ""
 
 
 def snapshot() -> dict[int, tuple[str, int]]:

@@ -138,9 +138,38 @@
     - 추후 conpty 기반 안정 메커니즘 확보 시 백그라운드 기본 전환 검토.
 - 기본 동작 = HWND 찾아 포커스 강제 후 타이핑 (v1 기준).
 
+### 4.6b 터미널 라이프사이클 명령 — `/open` `/close N` `/stop N` (2026-07-04)
+- `imadhd/commands/open_command.py`: `/open` — `wt -w new new-tab --title Claude cmd.exe /c claude` 를
+  detached spawn. SessionStart 훅이 새 세션을 자동 번호 할당(연결 알림은 아래 참고). 토큰 분리
+  배열 형태(`[WT,"-w","new","new-tab",...]`)로 spawn — 문자열 결합 시 wt 인자 파싱 실패(실측, 따옴표
+  중첩 문제) 확인됨.
+- `imadhd/commands/close_command.py`: `/close N` — ①`WM_CLOSE` PostMessage(graceful) ②
+  `taskkill /F /PID <cc_pid> /T`(보측, claude 강제종료→cmd→WT 탭 closeOnExit 연쇄) ③registry.release.
+- `imadhd/commands/stop_command.py`: `/stop N` — 진행 중 작업 중단. `transport.send_key(target, VK_ESCAPE)`
+  로 ESC 1개 전송(CC TUI 관례: ESC=현재 generation/tool 중단).
+- `Transport.send_key()`: base.py 에 추가된 신규 추상 메서드(기본 NotImplementedError). Windows
+  구현(`sendkeys_win.py`)은 `_acquire_focus()`(구 `_focus_type` 리팩터, 텍스트주입과 공유) 후
+  `keybd_event` keydown/keyup.
+- 봇 메뉴(setMyCommands) 및 `/help` 텍스트에 반영 완료.
+
+### 4.6c 연결/종료 알림 제거 + `/list` 창 제목 표시 (2026-07-04, 대표님 피드백)
+- **배경**: "N번 터미널 연결됨/종료" 자동 알림이 채팅을 지저분하게 만든다는 대표님 지적(처음엔
+  무음 전송으로 완화 시도 → 재지적 받고 아예 제거로 정정).
+- `register_hook.py`: 연결 성공 알림 완전 제거. 슬롯 만실(등록 실패, 실제 조치 필요) 알림만 유지.
+- `router.py`: sweep 루프의 "❌ N번 종료" 알림 제거. 상태는 상태보드(pin)와 `/list` 로 확인.
+- `list_command.py`: 표시 항목을 `PID + cwd` → **창 제목**(`proc_win.window_title(hwnd)`)으로 교체.
+  hwnd 무효/제목 빈 문자열이면 `cwd` 로 폴백(정보 손실 방지).
+- `proc_win.py`: `window_title(hwnd)` 추가 — `GetWindowTextW` 래핑, 실패 시 `""`.
+
 ### 4.7 Claude Code 규칙 추가 (CLAUDE.md)
 `~/.claude/CLAUDE.md` 의 절대규칙 블록에 추가:
-> **텔레그램 요청 응답 규칙**: 프롬프트에 `[A.D.H.D]` 표시가 있으면, 최종 답변의 **마지막 줄에 반드시 `[A.D.H.D]` 문구 출력**. (Stop 훅 회신 트리거.)
+> **텔레그램 요청 응답 규칙**: 프롬프트에 `[A.D.H.D]` 표시가 있으면, 표는 쓰지 말고(모바일 미렌더)
+> 핵심만 짧게(의미 단위 줄바꿈) 답한 뒤, 최종 답변의 **마지막 줄에 반드시 `[A.D.H.D]` 문구 출력**.
+> (Stop 훅 회신 트리거.)
+
+추가로 `reply/markup.py` 에 `flatten_tables()` 도입 — CC 가 규칙을 어기고 표를 출력해도
+`md_to_tg_html()` 이 표를 자동으로 `가운뎃점 구분 평문 줄`로 평탄화(2차 방어). 구분선(`|---|---|`)
+행은 통째로 제거, 코드펜스 내부 표는 보존(건드리지 않음).
 
 ### 4.8 봇 명령 메뉴 자동 등록 (setup)
 `python -m imadhd adhd [bot_token]` → setMyCommands 로 봇 `/` 자동완성 메뉴 등록 (OSS 사용자 설치 후 1회).
