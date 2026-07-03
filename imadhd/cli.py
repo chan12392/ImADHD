@@ -3,6 +3,7 @@
   btg-router   → router_main   (pm2 데몬)
   btg-register → register_main (CC SessionStart 훅)
   btg-reply    → reply_main    (CC Stop 훅)
+  btg-ask      → ask_main      (CC PreToolUse 훅: AskUserQuestion → 텔레그램 버튼)
 """
 from __future__ import annotations
 
@@ -32,6 +33,11 @@ def register_main() -> int:
 def reply_main() -> int:
     from .hooks import reply_hook
     return reply_hook.main()
+
+
+def ask_main() -> int:
+    from .hooks import ask_hook
+    return ask_hook.main()
 
 
 def adhd_main() -> int:
