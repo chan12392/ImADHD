@@ -133,6 +133,15 @@ class TelegramClient:
             payload["scope"] = scope
         return self._api("deleteMyCommands", payload, timeout=10)
 
+    def get_my_commands(self, scope: dict | None = None) -> list:
+        """현재 등록된 명령 메뉴 조회(getMyCommands). install 병합용.
+        scope=None → default. 반환=[{command, description}, ...]."""
+        payload: dict = {}
+        if scope:
+            payload["scope"] = scope
+        resp = self._api("getMyCommands", payload, timeout=10)
+        return resp.get("result", []) or []
+
     def _load_offset(self) -> int:
         try:
             return int(self.offset_path.read_text(encoding="utf-8").strip() or "0")

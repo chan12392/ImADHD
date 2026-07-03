@@ -63,15 +63,37 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 
 ## Install
 
-Requires **Python ≥ 3.9 on Windows**, and a Telegram bot token from [@BotFather](https://t.me/BotFather).
+Requires **Python ≥ 3.9** and **Node.js** (for pm2) on Windows, and a Telegram bot token from [@BotFather](https://t.me/BotFather).
 
-```bash
+### One-line (recommended)
+
+`scripts/install.ps1` does everything — prompts for your token & chat id if not passed, then auto-runs all four steps (idempotent, safe to re-run):
+
+1. **pm2** install + reboot survival (`pm2-windows-startup` + a `resurrect.cmd` hardened to call Node by absolute path so it survives login, + a `schtasks` ONLOGON backup), then starts the router daemon.
+2. **Telegram command menu** — *merged*, not overwritten: any existing bot commands are preserved, only colliding names are replaced.
+3. **Claude Code hooks** — `SessionStart` / `Stop` / `PreToolUse(AskUserQuestion)` added to `~/.claude/settings.json` (idempotent — existing hooks untouched, your token/chat injected into `settings.json.env`).
+4. **Telegram pin** — the status board is created and pinned on first run.
+
+```powershell
 git clone https://github.com/chan12392/ImADHD.git
 cd ImADHD
+./scripts/install.ps1
+# or non-interactive:
+./scripts/install.ps1 -Token 123:ABC -Chat 123456789
+```
+
+That's it — open a Claude Code window and the `SessionStart` hook claims a slot; send `1️⃣ ping [A.D.H.D]` from Telegram to drive terminal #1.
+
+> Install asks for `TELEGRAM_ALLOWED_CHAT_ID` (your user id from [@userinfobot](https://t.me/userinfobot)) and refuses to proceed without it — a public bot token alone would let anyone drive your terminals, so it's enforced **fail-closed**.
+
+### Manual (fallback / dev)
+
+`pip install -e ".[dev]"` adds pytest/ruff. `.env.example` documents every variable if you prefer to configure by hand; the manual hook + pm2 steps are detailed below.
+
+```bash
 pip install -e .            # runtime deps (python-dotenv)
-# for running the test suite / linting:
-pip install -e ".[dev]"
-cp .env.example .env       # then fill in the values below
+pip install -e ".[dev]"     # + test suite / linting
+cp .env.example .env       # then fill in the values
 ```
 
 ## Configure
@@ -92,6 +114,8 @@ Edit `.env`:
 
 ## Configure Claude Code hooks
 
+> **One-line install already does this.** This section is for manual setup / reference only.
+
 Add to `~/.claude/settings.json`:
 
 ```jsonc
@@ -111,6 +135,8 @@ Then teach Claude Code to end replies with the marker (so the `Stop` hook can ro
 > When a request ends with `[A.D.H.D]`, reply tersely and print `[A.D.H.D]` as the final line.
 
 ## Run the router
+
+> **One-line install already does this** (pm2 daemon + reboot survival). This section is for manual control / reference.
 
 ```bash
 pm2 start "btg-router" --name imadhd
