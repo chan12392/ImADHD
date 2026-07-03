@@ -80,7 +80,8 @@ def run(settings: "Settings") -> None:
                 continue
             chat = m.get("chat", {}).get("id")
             text = m.get("text", "") or ""
-            if settings.allowed_chat_id and str(chat) != str(settings.allowed_chat_id):
+            # allow_any_chat(dev)면 통과, 아니면 allowed 화이트리스트 chat만.
+            if not settings.allow_any_chat and str(chat) != str(settings.allowed_chat_id or ""):
                 continue
             msg = Message(chat_id=str(chat), text=text, raw=upd)
             handled = False
