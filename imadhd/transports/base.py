@@ -30,3 +30,10 @@ class Transport(ABC):
     @abstractmethod
     def is_alive(self, target: dict) -> bool:
         """해당 세션 터미널이 살아있는지(입력 직전 사전체크용)."""
+
+    def send_key(self, target: dict, vk: int) -> InjectResult:
+        """가상키(ESC=0x1B 등) 1개 전송. /stop(작업 중단)용.
+
+        기본 구현 미지원(NotImplementedError). Windows 구현만 제공.
+        """
+        raise NotImplementedError("이 transport 는 send_key 미지원")

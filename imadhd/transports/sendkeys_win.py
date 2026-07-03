@@ -16,6 +16,7 @@ from .base import Transport, InjectResult
 user32 = ctypes.windll.user32
 
 VK_RETURN = 0x0D
+VK_ESCAPE = 0x1B
 INPUT_KEYBOARD = 1
 KEYEVENTF_UNICODE = 0x0004
 KEYEVENTF_KEYUP = 0x0002
@@ -129,6 +130,28 @@ class SendKeysWinTransport(Transport):
         return InjectResult(delivered=True, method="focus", note="포커스 강제 입력",
                             rediscovered_hwnd=rediscovered)
 
+    def send_key(self, target: dict, vk: int) -> InjectResult:
+        """가상키 1개(ESC 등) 전송. /stop(작업 중단)용. 주입과 동일 포커스 확보 후
+        keybd_event keydown/keyup."""
+        hwnd = target.get("hwnd")
+        pid = target.get("pid")
+        rediscovered = None
+        if not hwnd or not user32.IsWindow(hwnd):
+            if pid:
+                from ..core.proc_win import console_hwnd
+                new_hwnd = console_hwnd(pid)
+                if new_hwnd and user32.IsWindow(new_hwnd):
+                    hwnd = new_hwnd
+                    rediscovered = new_hwnd
+            if not hwnd or not user32.IsWindow(hwnd):
+                return InjectResult(delivered=False, method="none",
+                                    note="hwnd invalid/dead (console 재탐색 실패)")
+        self._acquire_focus(hwnd)
+        user32.keybd_event(int(vk), 0, 0, 0)
+        user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
+        return InjectResult(delivered=True, method="focus-vk", note=f"vk=0x{vk:02X}",
+                            rediscovered_hwnd=rediscovered)
+
     def _post_message(self, hwnd, text: str) -> bool:
         """베타: WM_CHAR 로 백그라운드 전송 시도. 도달 여부는 반환 안 함 → 미보장."""
         try:
@@ -141,6 +164,11 @@ class SendKeysWinTransport(Transport):
             return False
 
     def _focus_type(self, hwnd, text: str) -> None:
+        self._acquire_focus(hwnd)
+        _type_unicode(text)
+
+    def _acquire_focus(self, hwnd) -> bool:
+        """hwnd 포커스 강제 확보. 텍스트 주입/가상키 전송 공통 선행. 반환=SetForegroundWindow 결과."""
         kernel32 = ctypes.windll.kernel32
         SW_RESTORE = 9
         if user32.IsIconic(hwnd):
@@ -167,7 +195,7 @@ class SendKeysWinTransport(Transport):
             time.sleep(0.4)
             after_fg = user32.GetForegroundWindow() or 0
             _diag_log(f"focus hwnd={hwnd} SetFG={ok} attached={attached} fg_before={fg_now} fg_after={after_fg} match={after_fg == hwnd}")
-            _type_unicode(text)
+            return bool(ok)
         finally:
             if attached:
                 user32.AttachThreadInput(tid_self, tid_fg, False)

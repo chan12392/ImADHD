@@ -1,5 +1,5 @@
 """md_to_tg_html 변환 테스트 — 마크다운 → Telegram HTML."""
-from imadhd.reply.markup import md_to_tg_html
+from imadhd.reply.markup import md_to_tg_html, flatten_tables
 
 
 def test_bold():
@@ -48,3 +48,38 @@ def test_mixed():
 
 def test_empty():
     assert md_to_tg_html("") == ""
+
+
+# ---------- flatten_tables (표 → 평문, 텔레그램 모바일은 표 렌더 못 함) ----------
+
+def test_flatten_simple_table():
+    md = "| a | b |\n|---|---|\n| 1 | 2 |"
+    assert flatten_tables(md) == "a · b\n1 · 2"
+
+
+def test_flatten_removes_alignment_separator():
+    md = "| 항목 | 값 |\n|:---|---:|\n| x | y |"
+    out = flatten_tables(md)
+    assert "---" not in out
+    assert out == "항목 · 값\nx · y"
+
+
+def test_flatten_table_inside_code_fence_untouched():
+    md = "```\n| a | b |\n|---|---|\n```"
+    assert flatten_tables(md) == md
+
+
+def test_flatten_no_table_passthrough():
+    assert flatten_tables("일반 텍스트\n둘째 줄") == "일반 텍스트\n둘째 줄"
+
+
+def test_flatten_empty():
+    assert flatten_tables("") == ""
+
+
+def test_md_to_tg_html_flattens_table_before_html_convert():
+    md = "| 항목 | 값 |\n|---|---|\n| **A** | `1` |"
+    out = md_to_tg_html(md)
+    assert "|" not in out
+    assert "<b>A</b>" in out
+    assert "<code>1</code>" in out

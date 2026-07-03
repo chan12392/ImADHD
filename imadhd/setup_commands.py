@@ -14,6 +14,9 @@ def build_commands(max_slots: int = 6) -> list[dict]:
       `/1`~`/N` : N번 터미널로 메시지 전송   (InjectCommand — 즉시주입/pending)
       `/list`   : 활성 터미널 목록            (ListCommand)
       `/new N`  : N번 터미널 새 대화(/clear)  (NewCommand)
+      `/open`   : 새 터미널 생성               (OpenCommand)
+      `/close N`: N번 터미널 닫기              (CloseCommand)
+      `/stop N` : N번 작업 중단(ESC)           (StopCommand)
       `/help`   : 명령 도움말                  (HelpCommand)
       `/pin`    : 상태 보드 핀 새로고침        (PinCommand)
     """
@@ -23,6 +26,9 @@ def build_commands(max_slots: int = 6) -> list[dict]:
     ]
     cmds.append({"command": "list", "description": "활성 터미널 목록 보기"})
     cmds.append({"command": "new", "description": "N번 터미널 새 대화(/clear)  예: /new 1"})
+    cmds.append({"command": "open", "description": "새 터미널 생성"})
+    cmds.append({"command": "close", "description": "N번 터미널 닫기  예: /close 1"})
+    cmds.append({"command": "stop", "description": "N번 작업 중단(ESC)  예: /stop 1"})
     cmds.append({"command": "help", "description": "명령 도움말"})
     cmds.append({"command": "pin", "description": "상태 보드 핀 새로고침"})
     return cmds

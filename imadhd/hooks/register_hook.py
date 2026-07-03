@@ -6,7 +6,7 @@ stdin: CC hook payload JSON (session_id, cwd 등).
   2. registry 의 죽은 슬롯 sweep (IsWindow)
   3. 이 터미널 콘솔 창 HWND+PID 캡처 (GetConsoleWindow → GetWindowThreadProcessId)
   4. registry.claim_slot (동일 session_id 재사용 시 갱신)
-  5. 신규/변경 시에만 텔레그램 알림 "✅ N번 터미널 연결됨"
+  5. 연결 성공은 알림 없음(채팅 지저분해짐 방지, /list 로 확인). 슬롯 만실만 경고 알림.
 """
 from __future__ import annotations
 
@@ -181,11 +181,10 @@ def main() -> int:
     num = reg.claim_slot(session_id, hwnd, pid, cwd, started)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
 
-    if s.allowed_chat_id and not is_refresh:
-        if num is None:
-            tg.send(s.allowed_chat_id, f"⚠️ 모든 슬롯({s.max_slots}) 사용 중. 세션 미등록(PID {pid}).")
-        else:
-            tg.send(s.allowed_chat_id, f"✅ {num}번 터미널 연결됨 (PID {pid})")
+    # 연결 성공 알림은 채팅이 지저분해져 생략(/list 로 언제든 확인 가능).
+    # 슬롯 만실(실패)만 알림 — 실제 조치가 필요한 경우라 유지.
+    if s.allowed_chat_id and not is_refresh and num is None:
+        tg.send(s.allowed_chat_id, f"⚠️ 모든 슬롯({s.max_slots}) 사용 중. 세션 미등록(PID {pid}).")
     return 0
 
 
