@@ -146,3 +146,29 @@ def test_slash_two_digits_not_matched(tmp_path):
     """/10 → 일반 메시지(두자리 방지). match 거짓."""
     cmd = InjectCommand()
     assert cmd.match(Message("42", "/10 hello", {})) is False
+
+
+def test_normalize_question_leading_qmark():
+    """선두 '?' → '뭐?' 변환. CC 도움말 단축키(?) 회피."""
+    from imadhd.commands.inject_command import _normalize_question as nq
+    assert nq("?") == "뭐?"
+    assert nq("??") == "뭐?"                       # ? 여러 개
+    assert nq("?지금뭐야") == "뭐? 지금뭐야"
+    assert nq("??여러개") == "뭐? 여러개"
+    assert nq("그냥문장") == "그냥문장"             # ? 아니면 그대로
+    assert nq("끝에물음?") == "끝에물음?"           # 선두만 변환
+
+
+def test_do_inject_question_mark_becomes_mwo(tmp_path):
+    """텔레그램 '?' 시작 주입 → '뭐?' 변환되어 CC 전달."""
+    from imadhd.commands.inject_command import do_inject
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    do_inject(ctx, 1, "?이거뭐야", "42")
+    assert tr.injected is not None
+    text = tr.injected[1]
+    assert text.startswith("뭐?")
+    assert "이거뭐야" in text
+    assert "[A.D.H.D]" in text

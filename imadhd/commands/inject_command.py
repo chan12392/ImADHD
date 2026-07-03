@@ -71,6 +71,19 @@ class InjectCommand(Command):
         do_inject(ctx, num, body, msg.chat_id)
 
 
+def _normalize_question(body: str) -> str:
+    """선두 '?' 를 '뭐? ' 로 변환.
+
+    CC 가 터미널 선두 '?' 입력을 기본 도움말 단축키로 해석 → 주입이 무시됨(버그 아님).
+    텔레그램 '?' 로 시작하는 질문은 "뭐? <본문>" 으로 바꿔 CC 가 질문으로 인식.
+    '?' 여러 개도 한 번에 처리. 본문 없으면 "뭐?".
+    """
+    if body.startswith("?"):
+        rest = body.lstrip("?").strip()
+        return f"뭐? {rest}".strip()
+    return body
+
+
 def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     """주입 공통 로직: alive 재체크 + 본문 정규화 + 주입 + busy 표시.
 
@@ -86,7 +99,7 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
         return
     _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]}")
     # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
-    body = " ".join(body.split()) or "(빈 입력)"
+    body = _normalize_question(" ".join(body.split()) or "(빈 입력)")
     # 마커는 CLAUDE.md 규칙 트리거([A.D.H.D])만.
     # CC 규칙이 자동으로 "1~2문장 짧게 답 + 마지막 줄에 [A.D.H.D] 출력" 수행.
     inject_text = f"{body} [A.D.H.D]"
