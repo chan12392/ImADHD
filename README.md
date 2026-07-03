@@ -45,6 +45,7 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 
 - **Terminals don't know about Telegram.** The router injects keystrokes; a hook captures the reply.
 - Terminal ↔ number mapping is tracked in a runtime registry (**HWND + pid + session id**), **not** by window title — so a renamed/recreated window is rediscovered automatically.
+- **One Claude Code session per Windows Terminal window.** Injection targets the window handle of a specific slot. Run each terminal in its **own** WT window — if you pack several CC sessions as tabs in one window they can't be told apart and every DM lands in whatever tab is active. (Tip: launch with `wt -w new …`, or set WT `"windowingBehavior": "new"`.)
 - A **status board** (Telegram `ReplyKeyboard`) shows every slot at a glance: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead.
 
 ## Components

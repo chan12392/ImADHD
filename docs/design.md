@@ -74,7 +74,7 @@
 - 절차:
   1. stdin payload에서 `session_id`, `cwd` 확보.
   2. registry 잠금 → 가장 낮은 빈 번호(1~6) 선택. 6개 꽉 차면 `7` 이상 거부 + 텔레그램 경고.
-  3. `GetForegroundWindow()` 로 현재 터미널 HWND 캡처 (CC 시작 직후 포커스 = 이 터미널).
+  3. **HWND 캡처 (pid 기반 결정론적, 2026-07-03 수정)** — `console_hwnd(cc_pid)` 우선: CC pid(claude.exe)에서 `AttachConsole→GetConsoleWindow→PseudoConsole owner` 로 창 역추적. 포그라운드 레이스 무관, 세션마다 고유 hwnd. 1 WT 창 다중CC(탭)에선 ConPTY owner 가 공유/비top-level 이라 주입 SetForegroundWindow 가 안 통하므로 **운용상 CC 1세션 = WT 창 1개(창 분리)** 권장. `console_hwnd` 실패 시 폴백 `GetForegroundWindow()` → 자기 콘솔.
   4. pid(현재 프로세스 또는 부모) 기록.
   5. registry 갱신 해제.
   6. 텔레그램 알림: `✅ N번 터미널 연결됨 (PID xxxx, cwd)`.
