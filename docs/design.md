@@ -86,15 +86,16 @@
 - 역할: 텔레그램 롱폴 → 라우팅 → 주입.
 - 절차:
   1. `getUpdates(offset)` 롱폴. offset 은 `$HOME/.claude/baekho-tg/offset.txt` 에 영구 저장(pm2 재시작 시 중복 처리 방지).
-  2. 메시지 본문 선두의 숫자이모지(`1️⃣`~`6️⃣`) 파싱.
-     - **없으면 무시** (아무 반응 안 함).
+  2. 메시지 본문 선두의 **숫자이모지(`1️⃣`~`6️⃣`) 또는 슬래시(`/1`~`/6`)** 파싱.
+     - **둘 다 아니면 무시** (아무 반응 안 함).
+     - `/N` 단독 = 버튼 클릭과 동일(선택모드 pending). `/N <본문>` = 즉시 주입. `/10` 등 두자리는 무시.
      - 단 예외 명령(번호 없이): `/터미널` → 현재 registry 활성 목록 전체 전송.
   3. 번호 → registry 조회.
   4. **사전체크** (리스크2 완화):
      - `IsWindow(hwnd)` + pid 프로세스 생존 확인.
      - 죽었으면 → registry 해당 슬롯 `null` 처리 → 텔레그램 `❌ N번 터미널 꺼져있음` → 입력 중단.
   5. 살았으면 ack 전송: `📩 N번 ← <본문 요약>`.
-  6. `send_keys_to_claude.py --hwnd <hwnd> --text "<본문>\n\n[텔레그램에서 온 요청. 답변 끝에 '텔레그램으로 답변' 문구를 출력할 것]"` 실행.
+  6. `send_keys_to_claude.py --hwnd <hwnd> --text "<본문>\n\n[A.D.H.D]"` 실행.
      - 입력: 기본 **포커스 강제** (v1). `--bg` 옵션 시 베타 백그라운드 시도 (리스크3).
   7. 다음 offset 으로 갱신.
 
@@ -105,7 +106,7 @@
 - 절차:
   1. stdin payload에서 `session_id`, `transcript_path` 확보.
   2. transcript JSONL 의 마지막 assistant 메시지 본문 읽기.
-  3. 본문 말단에 `텔레그램으로 답변` 마커 있는지 확인.
+  3. 본문 말단에 `[A.D.H.D]` 마커 있는지 확인.
      - 없으면 종료 (일반 터미널 응답 → 회신 안 함).
   4. 있으면 → 마커 **제거한 본문** 추출.
   5. registry 역조회: `session_id → 번호`.
@@ -125,7 +126,14 @@
 
 ### 4.6 백호 CLAUDE.md 규칙 추가
 `$HOME/.claude/CLAUDE.md` 의 절대규칙 블록에 추가:
-> **텔레그램 요청 응답 규칙**: 프롬프트에 `[텔레그램에서 온 요청]` 표시가 있으면, 최종 답변의 **마지막 줄에 반드시 `텔레그램으로 답변` 문구 출력**. (Stop 훅 회신 트리거.)
+> **텔레그램 요청 응답 규칙**: 프롬프트에 `[A.D.H.D]` 표시가 있으면, 최종 답변의 **마지막 줄에 반드시 `[A.D.H.D]` 문구 출력**. (Stop 훅 회신 트리거.)
+
+### 4.7 봇 명령 메뉴 자동 등록 (setup)
+`python -m imadhd adhd [bot_token]` → setMyCommands 로 봇 `/` 자동완성 메뉴 등록 (OSS 사용자 설치 후 1회).
+- `/1`~`/N`: "N번 터미널로 메시지 전송" (InjectCommand — `/N 본문`=즉시주입, `/N` 단독=pending)
+- `/list`: "활성 터미널 목록 보기" (ListCommand TRIGGERS `/list`·`/터미널` 지원)
+- 토큰: 인자 OR `.env` `TELEGRAM_BOT_TOKEN`. 인자 평문 = shell history 노출 → **.env 권장**.
+- 모듈: `imadhd/setup_commands.py`(`build_commands` + `register`), `telegram_api/client.set_my_commands`.
 
 ## 5. 데이터 흐름 (정상 케이스)
 
@@ -138,10 +146,10 @@
   → ack 텔레그램: "📩 3번 ← 빌드 로그 확인해줘"
   → send_keys --hwnd hwnd_3 (포커스 강제) → 타이핑:
       "빌드 로그 확인해줘
-       [텔레그램에서 온 요청. 답변 끝에 '텔레그램으로 답변' 출력]"
+       [A.D.H.D]"
       ENTER
   → CC-3 백호 정상 처리
-  → CC-3 답변: "...로그 분석 결과...\n\n텔레그램으로 답변"
+  → CC-3 답변: "...로그 분석 결과...\n\n[A.D.H.D]"
   → Stop 훅: transcript 마지막 assistant 읽기 → 마커 감지
   → 본문 추출(마커 제거) → session_id → 3
   → 텔레그램: "3️⃣ ...로그 분석 결과..."
@@ -291,7 +299,7 @@ baekho-tg/                          # 레포 루트 (git private)
 - 버튼 텍스트/상태 텍스트 포맷: 번호이모지와 마크 사이 **점(`.`) 구분** → `1️⃣.⭕`. (숫자와 상태 시인성 분리.)
 - 버튼 클릭(번호+점+상태마크) → **선택모드 대기**(pending) 등록. **안내 메시지 생략**.
 - **대기 토글**: 같은 번호 재클릭 → 대기 취소. 다른 번호 클릭 → 대기 번호 교체. (대표님 요청 "한 번 더 누르면 취소, 다른 번호 누르면 변경".)
-- 다음 본문 메시지(번호 없음) → 대기 번호로 주입(**300초(5분) TTL**).
+- 다음 본문 메시지(번호 없음) → 대기 번호로 주입(**600초(10분) TTL**).
 - 버튼 클릭 시 어쩔 수 없이 `1️⃣.⭕` 메시지 1줄은 채팅에 남음(ReplyKeyboard 제약). 안내 회신 생략으로 부담 최소화.
 
 ### 12.4 컴포넌트 변경
@@ -313,7 +321,7 @@ baekho-tg/                          # 레포 루트 (git private)
   - **대기 토글**: `ctx.pending[chat]` 기존 번호 == 클릭 번호 → `del`(취소). 아니면(신규/다른 번호) → `ctx.pending[chat]=(num, time.time())`(교체/등록). 주입/안내 없이 return.
 - 본문 있으면 `do_inject()` 즉시 주입.
 - `do_inject(ctx, num, body, chat)` 헬퍼: alive 재체크 + 본문 정규화(한 줄, `\n` 제거) + 마커 부착 + busy 설정. router pending 주입이 함께 사용.
-- `PENDING_TTL = 300` 상수(5분).
+- `PENDING_TTL = 600` 상수(10분).
 
 **CommandContext** (`imadhd/commands/base.py`):
 - `pending: dict` 필드 추가(`field(default_factory=dict)`). `chat_id → (num, timestamp)`.
@@ -331,14 +339,14 @@ baekho-tg/                          # 레포 루트 (git private)
   → body=".⭕" → 점 제거 → "⭕"(상태마크)
   → ctx.pending 미사용 → pending["chat"]=(1, ts). 안내 생략.
 [대표님] "로그 확인해줘" (번호 없음)
-  → router: parse_leading_number=None + pending 있음 + TTL(300s) 내
+  → router: parse_leading_number=None + pending 있음 + TTL(600s) 내
   → do_inject(ctx, 1, "로그 확인해줘", chat)
-  → CC-1 주입: "로그 확인해줘 [텔레그램에서 온 요청]"
+  → CC-1 주입: "로그 확인해줘 [A.D.H.D]"
   → pending 소비. CC 답변 마커 → Stop 훅 회신.
 
 [토글] 대기 중 같은 번호 재클릭(1️⃣.⭕) → pending 삭제(대기 취소).
 [교체] 대기 중 다른 번호 클릭(2️⃣.⭕) → pending[chat]=(2, ts) 교체.
-(300초(5분) 경과 본문 없음 → pending 자동 해제)
+(600초(10분) 경과 본문 없음 → pending 자동 해제)
 ```
 
 ### 12.6 트레이드오프 결정 기록
@@ -352,7 +360,7 @@ baekho-tg/                          # 레포 루트 (git private)
 ### 12.7 리스크 & 보완
 
 1. **잘못된 터미널 주입**: pending 중 본문이 의도치 않은 메시지여도 주입됨.
-   - 완화: TTL 300초(5분). 클릭 직후 바로 본문 치는 흐름 권장. **취소 토글**(같은 번호 재클릭)로 의도치 않은 대기 해제 가능.
+   - 완화: TTL 600초(10분). 클릭 직후 바로 본문 치는 흐름 권장. **취소 토글**(같은 번호 재클릭)로 의도치 않은 대기 해제 가능.
 2. **ReplyKeyboard 활성 갱신**: ~본문·버튼 분리(12.11) 후 버튼은 고정(번호만)이라 본문 edit와 무관. 활성 키보드 = keyboard_msg 고정.~
 3. **버튼 클릭 메시지 잔류**: `1️⃣`(번호만) 1줄씩 채팅에 쌓임(ReplyKeyboard 불가피). 안내 회신 생략으로 줄 수 최소화.
 4. **대기 상태 비가시성(해소 2026-07-03)**: 안내 생략 정책상 대표님이 어떤 번호 대기 중인지 채팅에 표시 안 됐음. → **⏳ 시각화** 추가(12.9).
@@ -361,6 +369,8 @@ baekho-tg/                          # 레포 루트 (git private)
 6. **단일 메시지 edit 실패 → 본문·버튼 분리로 근본 해결(수정 2026-07-03)**: 12.3의 "본문+markup 단일 메시지를 editMessageText로 갱신" 설계는 Telegram 제약 충돌. `reply_markup`(ReplyKeyboard) 포함 메시지는 editMessageText 시 400 **"message can't be edited"** 반환(markup 없는 순수 텍스트만 edit 가능, 라이브 API 검증 확보). → 단일 메시지 edit이 계속 실패 → 자동 repin 발동 → "지웠다 다시 고정" 무한 반복(대표님 제보).
    - **근본 수정(12.11)**: 본문(상태 텍스트, markup 없음→edit 가능)과 버튼(ReplyKeyboard, 번호만→고정)을 **2개 메시지로 분리**. 상태 갱신은 본문만 editMessageText → 핀 고정 유지한 채 실시간 갱신, repin 발동 없음.
    - (참고) `client.edit_message_text`는 400 중 "not modified"(내용 동일, 정상)만 catch, 그 외는 raise → 상위에서 repin 유도(본문이 삭제/무효된 예외 상황용 자가복구 경로로 남김).
+7. **같은 터미널이 중복 슬롯 점유 → "N번 2개" 표시(수정 2026-07-03)**: `claim_slot`이 `session_id`만 매칭했음. CC `/resume`(세션재개)는 같은 CC 프로세스(pid 동일)지만 session_id를 새로 발급 → 기존 슬롯 못 찾고 새 슬롯 점유 → 터미널 1개인데 #1·#2 두 개 표시.
+   - **수정**: `claim_slot`이 `session_id` **OR `pid`** 매칭 → 같은 CC(pid)면 session 변경에도 같은 슬롯 재사용·갱신. `tests/test_registry_pid_reuse.py`로 검증(3 case 통과).
 
 ### 12.8 라이브 검증 체크리스트
 

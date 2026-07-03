@@ -46,7 +46,7 @@ class Settings:
             max_slots=int(os.environ.get("IMADHD_MAX_SLOTS", "6")),
             data_dir=data_dir,
             transport=os.environ.get("IMADHD_TRANSPORT", "sendkeys_win").strip() or "sendkeys_win",
-            reply_marker=os.environ.get("IMADHD_REPLY_MARKER", "텔레그램으로 답변").strip() or "텔레그램으로 답변",
+            reply_marker=os.environ.get("IMADHD_REPLY_MARKER", "[A.D.H.D]").strip() or "[A.D.H.D]",
         )
 
     # 편의 경로

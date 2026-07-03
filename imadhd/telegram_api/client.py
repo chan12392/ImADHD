@@ -115,6 +115,11 @@ class TelegramClient:
                   {"chat_id": chat_id, "message_id": message_id, "disable_notification": True},
                   timeout=10)
 
+    def set_my_commands(self, commands: list) -> dict:
+        """봇 명령 메뉴 등록(setMyCommands). commands=[{command, description}, ...].
+        command: 소문자/숫자/밑줄 1~32자. description: 사용자 표시(한글 OK)."""
+        return self._api("setMyCommands", {"commands": commands}, timeout=10)
+
     def _load_offset(self) -> int:
         try:
             return int(self.offset_path.read_text(encoding="utf-8").strip() or "0")
