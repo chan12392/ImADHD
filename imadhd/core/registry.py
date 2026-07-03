@@ -94,9 +94,11 @@ class JSONFileRegistry(Registry):
 
     def claim_slot(self, session_id, hwnd, pid, cwd, started_at):
         data = self._read()
-        # 동일 session_id 재시작 → 기존 슬롯 재사용(덮어쓰기)
+        # 동일 session_id OR 동일 pid(CC 프로세스) → 기존 슬롯 재사용(덮어쓰기).
+        # /resume·세션재개 로 session_id 가 바뀌어도 같은 CC(pid)면 같은 슬롯 유지.
+        # 안 하면 같은 터미널이 session 변경마다 새 슬롯 점유 → "터미널 1개인데 N번 2개" 중복.
         for k, v in data.items():
-            if v and v.get("session_id") == session_id:
+            if v and (v.get("session_id") == session_id or v.get("pid") == pid):
                 num = int(k)
                 data[k] = SessionInfo(num, session_id, hwnd, pid, cwd, started_at).to_dict()
                 self._write(data)

@@ -21,7 +21,7 @@ class FakeTG:
 
 
 class FakeSettings:
-    reply_marker = "텔레그램으로 답변"
+    reply_marker = "[A.D.H.D]"
 
 
 def test_inject_dead_terminal_releases_slot(tmp_path):
@@ -44,7 +44,7 @@ def test_inject_alive_injects_with_marker(tmp_path):
     InjectCommand().handle(Message("42", "1️⃣ do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    assert "do work" in text and "[텔레그램에서 온 요청]" in text
+    assert "do work" in text and "[A.D.H.D]" in text
     assert "\n" not in text                           # 한 줄 주입 (분할 방지)
 
 
@@ -103,4 +103,46 @@ def test_do_inject_consumes_body(tmp_path):
     do_inject(ctx, 1, "안녕 백호", "42")
     assert tr.injected is not None
     _, text = tr.injected
-    assert "안녕 백호" in text and "[텔레그램에서 온 요청]" in text
+    assert "안녕 백호" in text and "[A.D.H.D]" in text
+
+
+def test_slash_injects_body(tmp_path):
+    """/N<본문> → 즉시 주입 (이모지 흐름과 동일)."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    cmd = InjectCommand()
+    assert cmd.match(Message("42", "/1 do work", {})) is True
+    cmd.handle(Message("42", "/1 do work", {}), ctx)
+    assert tr.injected is not None
+    _, text = tr.injected
+    assert "do work" in text and "[A.D.H.D]" in text
+
+
+def test_slash_no_space_injects(tmp_path):
+    """/1본문 (공백 없음) → 본문 주입."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    InjectCommand().handle(Message("42", "/1빌드확인", {}), ctx)
+    assert tr.injected is not None
+    assert "빌드확인" in tr.injected[1]
+
+
+def test_slash_only_sets_pending(tmp_path):
+    """/N 단독 → 선택모드 pending (버튼 클릭과 동일). 주입X."""
+    reg = JSONFileRegistry(tmp_path / "r.json")
+    reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
+    tg, tr = FakeTG(), FakeTransport(alive=True)
+    ctx = CommandContext(settings=FakeSettings(), registry=reg, transport=tr, telegram=tg)
+    InjectCommand().handle(Message("42", "/1", {}), ctx)
+    assert tr.injected is None
+    assert ctx.pending.get("42", (None,))[0] == 1
+
+
+def test_slash_two_digits_not_matched(tmp_path):
+    """/10 → 일반 메시지(두자리 방지). match 거짓."""
+    cmd = InjectCommand()
+    assert cmd.match(Message("42", "/10 hello", {})) is False
