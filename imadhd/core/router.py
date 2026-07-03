@@ -18,7 +18,7 @@ log = logging.getLogger("imadhd")
 def run(settings: "Settings") -> None:
     from ..telegram_api.client import TelegramClient
     from .registry import JSONFileRegistry
-    from ..transports.sendkeys_win import SendKeysWinTransport
+    from ..transports import make_transport
     from ..commands.base import Message, CommandContext
     from ..commands.inject_command import (
         InjectCommand, do_inject, parse_leading_number, PENDING_TTL,
@@ -33,7 +33,7 @@ def run(settings: "Settings") -> None:
 
     tg = TelegramClient(settings.bot_token, settings.offset_path, settings.allowed_chat_id)
     reg = JSONFileRegistry(settings.registry_path, settings.max_slots)
-    transport = SendKeysWinTransport()
+    transport = make_transport(settings.transport)
     board = PinBoard(tg, reg, settings.allowed_chat_id, settings.data_dir, settings.max_slots)
     # 매칭 순서 주의: InjectCommand(번호/슬래시N) 는 가장 관대 → 마지막.
     # /list /pin /new /help 전용 핸들러가 먼저 매칭되도록 앞에 둠.
