@@ -40,6 +40,16 @@ def ask_main() -> int:
     return ask_hook.main()
 
 
+def install_main() -> int:
+    """원라인 설치 (pm2 + 명령 병합 + CC 훅 + pin).
+
+      python -m imadhd install                      # 토큰/채팅: 프롬프트 또는 .env
+      python -m imadhd install --token X --chat 123
+    """
+    from .install import main as install_main
+    return install_main(sys.argv[2:])   # argv[1]="install" 제거
+
+
 def adhd_main() -> int:
     """봇 명령 메뉴 등록(setMyCommands).
 
@@ -82,4 +92,4 @@ def adhd_main() -> int:
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "router"
     sys.exit({"router": router_main, "register": register_main, "reply": reply_main,
-              "adhd": adhd_main}.get(cmd, router_main)())
+              "adhd": adhd_main, "install": install_main}.get(cmd, router_main)())

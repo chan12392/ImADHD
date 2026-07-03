@@ -4,12 +4,13 @@
   register  CC SessionStart 훅
   reply     CC Stop 훅
   adhd      봇 명령 메뉴 자동 등록 (setup)
+  install   원라인 설치 (pm2 + 명령 병합 + CC 훅 + pin)
 """
 import sys
 
-from .cli import router_main, register_main, reply_main, adhd_main
+from .cli import router_main, register_main, reply_main, adhd_main, install_main
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "router"
     sys.exit({"router": router_main, "register": register_main, "reply": reply_main,
-              "adhd": adhd_main}.get(cmd, router_main)())
+              "adhd": adhd_main, "install": install_main}.get(cmd, router_main)())
