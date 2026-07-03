@@ -102,16 +102,32 @@ class SendKeysWinTransport(Transport):
 
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
         hwnd = target.get("hwnd")
+        pid = target.get("pid")
+        rediscovered = None
         if not hwnd or not user32.IsWindow(hwnd):
-            return InjectResult(delivered=False, method="none", note="hwnd invalid/dead")
+            # hwnd 무효(stale): WT 창 재생성·재정렬, 또는 register fg 오캡처.
+            # CC(pid)는 살아있으므로 console_hwnd(pid) 로 현재 보이는 WT 창을 재탐색
+            # (ConPTY PseudoConsole → owner GW_OWNER → CASCADIA 창 자동 추적).
+            if pid:
+                from ..core.proc_win import console_hwnd
+                new_hwnd = console_hwnd(pid)
+                if new_hwnd and user32.IsWindow(new_hwnd):
+                    hwnd = new_hwnd
+                    rediscovered = new_hwnd
+                    _diag_log(f"[rediscover] pid={pid} stale_hwnd={target.get('hwnd')} new_hwnd={new_hwnd}")
+            if not hwnd or not user32.IsWindow(hwnd):
+                return InjectResult(delivered=False, method="none",
+                                    note="hwnd invalid/dead (console 재탐색 실패)")
         if background:
             if self._post_message(hwnd, text):
                 return InjectResult(
                     delivered=True, method="postmessage-bg",
                     note="best-effort; 도달 미보장(Windows Terminal 자식창엔 안 닿을 수 있음)",
+                    rediscovered_hwnd=rediscovered,
                 )
         self._focus_type(hwnd, text)
-        return InjectResult(delivered=True, method="focus", note="포커스 강제 입력")
+        return InjectResult(delivered=True, method="focus", note="포커스 강제 입력",
+                            rediscovered_hwnd=rediscovered)
 
     def _post_message(self, hwnd, text: str) -> bool:
         """베타: WM_CHAR 로 백그라운드 전송 시도. 도달 여부는 반환 안 함 → 미보장."""

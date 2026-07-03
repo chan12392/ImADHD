@@ -25,6 +25,8 @@ def run(settings: "Settings") -> None:
     )
     from ..commands.list_command import ListCommand
     from ..commands.pin_command import PinCommand
+    from ..commands.new_command import NewCommand
+    from ..commands.help_command import HelpCommand
     from ..boards.pin_board import PinBoard
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -33,7 +35,9 @@ def run(settings: "Settings") -> None:
     reg = JSONFileRegistry(settings.registry_path, settings.max_slots)
     transport = SendKeysWinTransport()
     board = PinBoard(tg, reg, settings.allowed_chat_id, settings.data_dir, settings.max_slots)
-    commands = [PinCommand(board), ListCommand(), InjectCommand()]
+    # 매칭 순서 주의: InjectCommand(번호/슬래시N) 는 가장 관대 → 마지막.
+    # /list /pin /new /help 전용 핸들러가 먼저 매칭되도록 앞에 둠.
+    commands = [PinCommand(board), ListCommand(), NewCommand(), HelpCommand(), InjectCommand()]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731

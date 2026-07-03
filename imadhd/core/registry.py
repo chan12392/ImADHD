@@ -54,6 +54,10 @@ class Registry(ABC):
         ...
 
     @abstractmethod
+    def set_hwnd(self, number: int, hwnd: int) -> bool:
+        """해당 슬롯의 hwnd 만 갱신(stale hwnd 복구용). status 는 보존."""
+
+    @abstractmethod
     def sweep_dead(self, is_alive: Callable[["SessionInfo"], bool]) -> int:
         """is_alive(info)가 False인 슬롯 전부 release. 반환=정리된 개수."""
 
@@ -147,6 +151,16 @@ class JSONFileRegistry(Registry):
                 v["status"] = status
                 self._write(data)
                 return True
+        return False
+
+    def set_hwnd(self, number: int, hwnd: int) -> bool:
+        """해당 슬롯의 hwnd 만 갱신. status 보존(stale hwnd 복구 후에도 busy 유지)."""
+        data = self._read()
+        v = data.get(str(number))
+        if v:
+            v["hwnd"] = int(hwnd)
+            self._write(data)
+            return True
         return False
 
     def active(self) -> list[SessionInfo]:

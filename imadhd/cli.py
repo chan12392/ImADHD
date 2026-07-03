@@ -8,6 +8,13 @@ from __future__ import annotations
 
 import sys
 
+# 윈도우 콘솔(cp949)에서 ✅❌ 등 이모지/한글 print 깨짐 방지.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 
 def router_main() -> int:
     from .config import Settings
@@ -59,7 +66,7 @@ def adhd_main() -> int:
     if resp.get("ok"):
         from .setup_commands import build_commands
         cmds = [c["command"] for c in build_commands(max_slots)]
-        print(f"✅ 명령 메뉴 등록 완료 (slots=1~{max_slots}, /list)")
+        print(f"✅ 명령 메뉴 등록 완료 (slots=1~{max_slots}, /list /new /help /pin)")
         print("   등록됨: " + ", ".join("/" + c for c in cmds))
         return 0
     print(f"❌ {resp}")

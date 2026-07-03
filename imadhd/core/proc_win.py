@@ -59,6 +59,22 @@ kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE, ctypes.POINTER(_FILETIME),
                                      ctypes.POINTER(_FILETIME)]
 _EPOCH_DIFF = 11644473600  # 1601-01-01 → 1970 (초)
 
+# console 재탐색용(AttachConsole→GetConsoleWindow). hwnd stale 복구.
+kernel32.GetConsoleWindow.restype = wintypes.HWND
+kernel32.GetConsoleWindow.argtypes = []
+kernel32.FreeConsole.restype = wintypes.BOOL
+kernel32.FreeConsole.argtypes = []
+kernel32.AttachConsole.restype = wintypes.BOOL
+kernel32.AttachConsole.argtypes = [wintypes.DWORD]
+
+# PseudoConsole(ConPTY 가상창) → owner(진짜 터미널 창) 추적용.
+user32 = ctypes.windll.user32
+GW_OWNER = 4
+user32.GetWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetClassNameW.restype = ctypes.c_int
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+
 
 def snapshot() -> dict[int, tuple[str, int]]:
     """전체 프로세스 스냅. 반환 {pid: (exe_name_lower, parent_pid)}."""
@@ -124,6 +140,45 @@ def exists(pid: int) -> bool:
 def name_of(pid: int) -> str:
     """pid 의 exe 이름(소문자, .exe 포함). 없으면 ''."""
     return snapshot().get(int(pid), ("", 0))[0]
+
+
+def console_hwnd(cc_pid: int) -> int:
+    """cc_pid(claude.exe)가 붙은 콘솔 창 hwnd 반환. registry.hwnd 복구용.
+
+    CC는 자체 창이 없고 부모 콘솔(powershell console)창에 붙어 있음.
+    AttachConsole(cc_pid)로 그 콘솔에 연결 → GetConsoleWindow 로 보이는 창 hwnd 획득.
+    registry.hwnd 는 터미널 창이 재생성되면 옛값(stale)이 되지만 CC(pid)는 살아있으므로,
+    이 함수로 현재 창을 재발견. 실패 0.
+
+    부작용: 호출 프로세스의 콘솔 연결 해제(FreeConsole). router(pm2 fork)는 콘솔 의존
+    없으므로 무해. FreeConsole 은 호출 프로세스만 뗌 → CC 자체 입출력엔 영향 없음.
+
+    한계: 한 콘솔에 CC 여러 개(터미널 탭)면 먼저 attach 한 콘솔 반환 → 부정확 가능.
+    현재 구성(Stream Deck 이 콘솔 개별 런칭 = CC당 1콘솔)에선 문제 없음.
+    """
+    if not cc_pid:
+        return 0
+    try:
+        kernel32.FreeConsole()
+        if not kernel32.AttachConsole(int(cc_pid)):
+            return 0
+        raw = int(kernel32.GetConsoleWindow() or 0)
+    except Exception:
+        return 0
+    finally:
+        try:
+            kernel32.FreeConsole()
+        except Exception:
+            pass
+    if not raw:
+        return 0
+    # ConPTY 가상창(PseudoConsoleWindow) → owner 가 진짜 WT/터미널 창.
+    cls = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(raw, cls, 256)
+    if cls.value == "PseudoConsoleWindow":
+        owner = user32.GetWindow(raw, GW_OWNER) or 0
+        return owner or raw
+    return raw
 
 
 def create_time(pid: int) -> float | None:

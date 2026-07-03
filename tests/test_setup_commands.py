@@ -5,14 +5,14 @@ from imadhd.setup_commands import build_commands
 
 def test_build_commands_6():
     cmds = build_commands(6)
-    assert [c["command"] for c in cmds] == ["1", "2", "3", "4", "5", "6", "list"]
+    assert [c["command"] for c in cmds] == ["1", "2", "3", "4", "5", "6", "list", "new", "help", "pin"]
     assert cmds[0]["description"] == "1번 터미널로 메시지 전송"
-    assert cmds[-1]["command"] == "list"
+    assert cmds[-1]["command"] == "pin"
 
 
 def test_build_commands_respects_max():
     cmds = build_commands(3)
-    assert len(cmds) == 4                       # 1~3 + list
+    assert len(cmds) == 7                       # 1~3 + list/new/help/pin
     assert cmds[2]["command"] == "3"
 
 

@@ -13,6 +13,7 @@ class InjectResult:
     delivered: bool        # 입력이 실제로 도달했는지 (확신 가능할 때만 True)
     method: str            # 사용된 방식 (예: "focus", "postmessage-bg")
     note: str = ""         # 부가 정보/경고
+    rediscovered_hwnd: int | None = None  # hwnd stale → console_hwnd 재탐색 성공 시 현재 hwnd
 
 
 class Transport(ABC):
