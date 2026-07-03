@@ -24,6 +24,7 @@ class Settings:
     data_dir: Path
     transport: str
     reply_marker: str
+    allow_any_chat: bool = False  # dev 전용: 모든 chat 허용(IMADHD_ALLOW_ANY_CHAT=1). 공개 봇 금지.
 
     @classmethod
     def load(cls, env_path: str | os.PathLike | None = None) -> "Settings":
@@ -40,13 +41,25 @@ class Settings:
         if not token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN missing. Set it in .env (see .env.example).")
 
+        # fail-closed: 공개 봇 보안. allowed_chat_id 도 없고 ALLOW_ANY 도 아니면 기동 거부.
+        # 봇 토큰만 있으면 누구나 터미널 제어 가능 → chat_id 화이트리스트 필수.
+        allowed = os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").strip() or None
+        allow_any = os.environ.get("IMADHD_ALLOW_ANY_CHAT", "").strip().lower() in {"1", "true", "yes"}
+        if not allowed and not allow_any:
+            raise RuntimeError(
+                "TELEGRAM_ALLOWED_CHAT_ID required (public bot security). "
+                "Set your Telegram user id (get it from @userinfobot), "
+                "or set IMADHD_ALLOW_ANY_CHAT=1 for local dev only."
+            )
+
         return cls(
             bot_token=token,
-            allowed_chat_id=(os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").strip() or None),
+            allowed_chat_id=allowed,
             max_slots=int(os.environ.get("IMADHD_MAX_SLOTS", "6")),
             data_dir=data_dir,
             transport=os.environ.get("IMADHD_TRANSPORT", "sendkeys_win").strip() or "sendkeys_win",
             reply_marker=os.environ.get("IMADHD_REPLY_MARKER", "[A.D.H.D]").strip() or "[A.D.H.D]",
+            allow_any_chat=allow_any,
         )
 
     # 편의 경로
