@@ -35,9 +35,6 @@ def main() -> int:
     text = _last_assistant_text(transcript_path)
     mc = MarkerCapture(s.reply_marker)
     rp = ReplyPayload(session_id, transcript_path, text)
-    if not mc.should_reply(rp):
-        return 0
-    body = mc.build_text(rp)
 
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
     info = reg.find_by_session(session_id)
@@ -45,7 +42,12 @@ def main() -> int:
     if info:
         inv = {v: k for k, v in EMOJI_TO_NUM.items()}
         emoji = inv.get(info.number, f"[{info.number}]")
-        reg.set_status_by_session(session_id, "idle")   # 작업 완료 → ⭕ 복귀
+        reg.set_status_by_session(session_id, "idle")   # 작업 완료 → ⭕ 복귀 (마커 무관 — 터미널 직접 작업도 busy_hook 진입했으면 복귀)
+
+    # 회신(텔레그램 전송)은 마커 있을 때만. idle 복귀는 위에서 마커 무관 처리.
+    if not mc.should_reply(rp):
+        return 0
+    body = mc.build_text(rp)
 
     if not s.allowed_chat_id:
         return 0

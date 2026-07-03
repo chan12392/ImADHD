@@ -291,6 +291,7 @@ HOOK_DEFS = [
     ("SessionStart", "imadhd.hooks.register_hook", 15000, None),
     ("Stop", "imadhd.hooks.reply_hook", 15000, None),
     ("PreToolUse", "imadhd.hooks.ask_hook", 300000, "AskUserQuestion"),
+    ("UserPromptSubmit", "imadhd.hooks.busy_hook", 10000, None),
 ]
 
 
