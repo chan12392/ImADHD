@@ -20,29 +20,49 @@ from pathlib import Path
 def _capture_terminal() -> tuple[int, int, dict]:
     """CC 터미널 창 HWND 와 CC PID(claude.exe) 반환 + 진단 정보.
 
-    HWND: CC 터미널 창(주입/포커스용). 포그라운드 우선(detached 훅=콘솔없음).
+    HWND 우선순위 (2026-07-03 수정):
+      1. **console_hwnd(cc_pid)** — CC pid 에서 결정론적으로 창 역추적
+         (AttachConsole→GetConsoleWindow→PseudoConsole owner). 포그라운드
+         레이스 무관, 세션마다 고유 핸들. 1 WT 창 다중탭이어도 CC본체 pid
+         가 다르면 각기 다른 ConPTY owner hwnd 반환 → 정확 타겟.
+      2. 폴백 GetForegroundWindow (레이스 위험, 마지막 수단)
+      3. 폴백 GetConsoleWindow (detached 훅=보통 0)
     PID: **CC 프로세스(claude.exe)** pid — 부모체인에서 탐색.
         터미널 pid(WindowsTerminal) 가 아니라 CC pid 를 써야
         CC 종료를 정확히 감지(터미널 창은 탭 닫아도 안 죽음).
 
     반환: (hwnd, cc_pid, diag)
     """
-    diag = {"foreground": 0, "console": 0, "fg_title": "", "chosen": "none",
+    diag = {"foreground": 0, "console": 0, "console_hwnd": 0,
+            "fg_title": "", "chosen": "none",
             "cc_pid": 0, "terminal_pid": 0}
     hwnd = 0
     term_pid = 0
     try:
         import ctypes
         from ctypes import wintypes
-        from ..core.proc_win import find_ancestor
+        from ..core.proc_win import find_ancestor, console_hwnd
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
         user32.GetForegroundWindow.restype = wintypes.HWND
         kernel32.GetConsoleWindow.restype = wintypes.HWND
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
         user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
+        # CC pid: 이 훅 프로세스(os.getpid()) 부터 부모체인에서 claude.exe 탐색.
+        cc_pid = find_ancestor(os.getpid(), "claude") or 0
+        diag["cc_pid"] = cc_pid
+
+        # 1) pid 기반 결정론적 역추적 (1순위 — 포그라운드 레이스 무관).
+        ch = console_hwnd(cc_pid) if cc_pid else 0
+        diag["console_hwnd"] = int(ch or 0)
+        if ch and user32.IsWindow(ch):
+            hwnd, diag["chosen"] = int(ch), "console_hwnd"
+
+        # 2/3) 폴백: 포그라운드 → 자기 콘솔.
         fg = user32.GetForegroundWindow() or 0
         con = kernel32.GetConsoleWindow() or 0
         diag["foreground"] = int(fg)
@@ -51,22 +71,18 @@ def _capture_terminal() -> tuple[int, int, dict]:
             buf = ctypes.create_unicode_buffer(512)
             user32.GetWindowTextW(fg, buf, 512)
             diag["fg_title"] = buf.value
+        if not hwnd:
+            if fg:
+                hwnd, diag["chosen"] = int(fg), "foreground"
+            elif con:
+                hwnd, diag["chosen"] = int(con), "console"
 
-        if fg:
-            hwnd, diag["chosen"] = int(fg), "foreground"
-        elif con:
-            hwnd, diag["chosen"] = int(con), "console"
-        else:
-            hwnd = 0
         if hwnd:
             pid_box = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_box))
             term_pid = int(pid_box.value)
             diag["terminal_pid"] = term_pid
 
-        # CC pid: 이 훅 프로세스(os.getpid()) 부터 부모체인에서 claude.exe 탐색.
-        cc_pid = find_ancestor(os.getpid(), "claude") or 0
-        diag["cc_pid"] = cc_pid
         # CC pid 못 잡으면 폴백 터미널 pid(구동작 호환).
         pid_out = cc_pid or term_pid or os.getpid()
         return hwnd, pid_out, diag
