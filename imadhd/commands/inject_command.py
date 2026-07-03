@@ -91,7 +91,14 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     # CC 규칙이 자동으로 "1~2문장 짧게 답 + 마지막 줄에 [A.D.H.D] 출력" 수행.
     inject_text = f"{body} [A.D.H.D]"
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
-    ctx.transport.inject(info.to_dict(), inject_text)
+    result = ctx.transport.inject(info.to_dict(), inject_text)
+    # transport 가 InjectResult(진짜) 반환 시에만 복구 처리. 테스트 FakeTransport(None) 방어.
+    new_hwnd = getattr(result, "rediscovered_hwnd", None)
+    if new_hwnd:
+        # stale hwnd 복구 → registry 에 현재 hwnd 영속(다음 주입은 즉시 성공).
+        # status(busy) 보존: set_hwnd 는 status 안 건드림.
+        ctx.registry.set_hwnd(num, new_hwnd)
+        _debug_log(f"[inject] num={num} hwnd 복구 {info.hwnd} → {new_hwnd}")
 
 
 def _starts_with_num_emoji(text: str) -> bool:

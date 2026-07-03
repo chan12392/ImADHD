@@ -115,10 +115,22 @@ class TelegramClient:
                   {"chat_id": chat_id, "message_id": message_id, "disable_notification": True},
                   timeout=10)
 
-    def set_my_commands(self, commands: list) -> dict:
+    def set_my_commands(self, commands: list, scope: dict | None = None) -> dict:
         """봇 명령 메뉴 등록(setMyCommands). commands=[{command, description}, ...].
-        command: 소문자/숫자/밑줄 1~32자. description: 사용자 표시(한글 OK)."""
-        return self._api("setMyCommands", {"commands": commands}, timeout=10)
+        command: 소문자/숫자/밑줄 1~32자. description: 사용자 표시(한글 OK).
+        scope=None → default. private DM 은 all_private_chats 가 default 보다 우선하므로,
+        DM 에도 메뉴를 띄우려면 scope={"type":"all_private_chats"} 로도 등록할 것."""
+        payload: dict = {"commands": commands}
+        if scope:
+            payload["scope"] = scope
+        return self._api("setMyCommands", payload, timeout=10)
+
+    def delete_my_commands(self, scope: dict | None = None) -> dict:
+        """해당 scope 명령 메뉴 삭제(잔재 정리). scope=None → default."""
+        payload: dict = {}
+        if scope:
+            payload["scope"] = scope
+        return self._api("deleteMyCommands", payload, timeout=10)
 
     def _load_offset(self) -> int:
         try:
