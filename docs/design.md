@@ -482,3 +482,20 @@ ImADHD/                             # 레포 루트
 - 버튼 텍스트 `1️⃣` → `1️⃣.`. 본문 `1️⃣.⭕` 시작 포맷과 일치(시인성/통일).
 - 클릭 시 전송 `1️⃣.` → `inject_command.handle`: 이모지 제거 후 `body="."` → `clean=body.replace(".","").strip()=""` → 선택모드 pending 분기. 기존 파싱 로직 호환(코드 변경 불필요).
 - 포맷 변경은 keyboard_msg 재생성 필요 → `repin.py` 1회 실행으로 적용(status_id=239, keyboard_id=241). 운영 중엔 재발 안 함(버튼 고정).
+
+### 12.13 부팅 자동시작 함정 수정 — node 절대경로 (추가 2026-07-03)
+
+**사고**: 12.12 세팅 후 재부팅 시 router 미부활. 증상 = pin/busy/주입 전부 안 됨, SessionStart 훅(`✅ N번 연결됨`)만 정상. router 부재가 원인.
+
+**근본 원인**: `pm2-windows-startup/pm2_resurrect.cmd` 본체 = `pm2 resurrect` 한 줄(PATH 의존). HKCU Run 키가 로그온 시 wscript→cmd 체인으로 실행하지만, **wscript 실행 컨텍스트엔 사용자 PATH(`...\npm`, Node 디렉토리)가 없어** `pm2`(=node) 명령 인식 실패 → cmd 에러 종료 → pm2 daemon 자체 미기동. 최초 `pm2 list`가 daemon을 새로 spawn한 것으로 확인.
+
+**수정**:
+- `pm2_resurrect.cmd` → node 절대경로 직접 호출로 재작성. PATH/node 환경 완전 무관.
+  ```bat
+  "C:\Program Files\nodejs\node.exe" "%USERPROFILE%\AppData\Roaming\npm\node_modules\pm2\bin\pm2" resurrect
+  ```
+- 이중화: `schtasks imadhd-pm2-resurrect /SC ONLOGON` 백업 등록(같은 cmd 부름). HKCU Run 키(기존) + 작업스케줄러(신규) 둘 다 → 어느 하나 살아도 부활.
+
+**검증**: node 직접 호출 → `[PM2] Restoring processes` 정상 + imadhd pid 유지(online, restarts 0). 재부팅 후 자동 부활 확보.
+
+**교훈**: Windows 로그온 자동시작(wscript/HKCU Run)은 사용자 셸 PATH를 상속하지 않을 수 있음 → node/python 등 인터프리터 호출은 **반드시 절대경로**. `pm2 resurrect`식 PATH 의존 명령은 로그온 컨텍스트에서 조용히 실패한다.
