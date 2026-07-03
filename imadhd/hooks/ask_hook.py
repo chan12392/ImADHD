@@ -48,6 +48,48 @@ def _emit(obj: dict) -> None:
     json.dump(obj, sys.stdout, ensure_ascii=False)
 
 
+def _last_user_text(transcript_path: str) -> str:
+    """transcript JSONL 의 마지막 실사용자 텍스트(tool_result 전용 라운드 제외) 반환."""
+    p = Path(transcript_path)
+    if not p.exists():
+        return ""
+    last = ""
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        msg = e.get("message") or e
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            last = content
+            continue
+        if isinstance(content, list):
+            parts = [b.get("text", "") for b in content
+                     if isinstance(b, dict) and b.get("type") == "text"]
+            txt = "\n".join(parts)
+            if txt.strip():
+                last = txt
+    return last
+
+
+def _origin_has_marker(transcript_path: str, marker: str) -> bool:
+    """이번 turn 을 촉발한 user 메시지가 마커로 끝나는지(=텔레그램 인입 요청).
+    마커 없으면 터미널 직접 작업 → 텔레그램 라우팅 skip(네이티브 UI)."""
+    if not transcript_path:
+        return False
+    text = _last_user_text(transcript_path)
+    for line in reversed((text or "").splitlines()):
+        if line.strip():
+            return marker in line
+    return False
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -77,6 +119,12 @@ def main() -> int:
     chat_id = s.allowed_chat_id
     if not chat_id:
         # allow_any_chat 모드 등 단일 채팅 미지정 → 라우팅 불가 → 네이티브 UI.
+        return 0
+
+    transcript_path = payload.get("transcript_path")
+    if not _origin_has_marker(transcript_path, s.reply_marker):
+        # 이번 turn 이 텔레그램 인입([A.D.H.D])이 아니면(=터미널 직접 작업) 라우팅 skip.
+        _debug_log(f"[ask] no origin marker ({s.reply_marker}) — native UI fallback")
         return 0
 
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
