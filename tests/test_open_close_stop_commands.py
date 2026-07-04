@@ -69,7 +69,8 @@ def test_open_matches_triggers():
     c = OpenCommand()
     assert c.match(Message("1", "/open", {}))
     assert c.match(Message("1", "/새터미널", {}))
-    assert not c.match(Message("1", "/open 1", {}))   # /open 은 인자 없음
+    # 숫자 인자(슬롯 선택 등과 충돌 방지)만 제외. 모델명/glm 인자는 test_open_command_provider.py 참조.
+    assert not c.match(Message("1", "/open 1", {}))
 
 
 def test_close_matches_with_and_without_arg():

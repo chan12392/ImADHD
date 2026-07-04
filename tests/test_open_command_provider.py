@@ -1,14 +1,16 @@
-"""/open provider 선택(Anthropic 공식 vs GLM(z.ai)) 회귀 테스트.
+"""/open provider/모델 선택 회귀 테스트.
 
 router(pm2) 프로세스가 예전에 z.ai 모드였던 셸 env 를 그대로 물려받고
 있으면, /open 이 항상 z.ai 로 라우팅되는 새 세션을 띄우는 문제가 있었다
 (2026-07-04 발견). 기본은 z.ai 프록시 env 를 지운 Anthropic 공식,
 `/open glm`(z.ai/zai 별칭)만 그 env 를 유지해 명시적으로 z.ai 를 쓴다.
+그 외 인자(`/open opus` 등)는 Anthropic 공식 + `claude --model <인자>`.
 """
 from imadhd.commands.base import Message
 from imadhd.commands.open_command import (
     OpenCommand,
     build_open_env,
+    parse_open_arg,
     _ANTHROPIC_PROXY_ENV_KEYS,
 )
 
@@ -36,11 +38,34 @@ def test_open_glm_matches():
     assert c.match(Message("1", "/open zai", {}))
 
 
-def test_open_unknown_arg_does_not_match():
-    """기존 설계 의도 유지: /open + 모르는 인자는 다른 명령과 충돌 방지 위해 no-match."""
+def test_open_model_arg_matches():
+    c = OpenCommand()
+    assert c.match(Message("1", "/open sonnet", {}))
+    assert c.match(Message("1", "/open opus", {}))
+    assert c.match(Message("1", "/open claude-opus-4-8", {}))
+
+
+def test_open_pure_digit_arg_does_not_match():
+    """숫자 하나짜리 인자(/open 1)는 슬롯 선택 등 다른 명령과 헷갈릴 수 있어 제외."""
     c = OpenCommand()
     assert not c.match(Message("1", "/open 1", {}))
-    assert not c.match(Message("1", "/open sonnet", {}))
+
+
+# ---------- parse_open_arg() ----------
+
+def test_parse_open_arg_empty():
+    assert parse_open_arg("") == (False, None)
+
+
+def test_parse_open_arg_glm_alias():
+    assert parse_open_arg("glm") == (True, None)
+    assert parse_open_arg("z.ai") == (True, None)
+    assert parse_open_arg("zai") == (True, None)
+
+
+def test_parse_open_arg_model_name():
+    assert parse_open_arg("sonnet") == (False, "sonnet")
+    assert parse_open_arg("opus") == (False, "opus")
 
 
 # ---------- build_open_env() ----------
@@ -62,3 +87,52 @@ def test_build_open_env_does_not_mutate_input():
     src = _polluted_env()
     build_open_env(src, use_glm=False)
     assert "ANTHROPIC_BASE_URL" in src  # 원본 os.environ 스타일 dict 는 건드리지 않음
+
+
+# ---------- handle() — 실제 spawn 커맨드라인 검증 ----------
+
+class _FakeTelegram:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, chat_id, text, **kw):
+        self.sent.append(text)
+
+
+def _handle_and_capture(monkeypatch, text):
+    from imadhd.commands.base import CommandContext
+    import imadhd.commands.open_command as oc
+
+    captured = {}
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured["env"] = kwargs.get("env")
+
+        class _P:
+            pass
+        return _P()
+
+    monkeypatch.setattr(oc.subprocess, "Popen", fake_popen)
+    tg = _FakeTelegram()
+    ctx = CommandContext(settings=None, registry=None, transport=None, telegram=tg)
+    oc.OpenCommand().handle(Message("1", text, {}), ctx)
+    return captured, tg
+
+
+def test_handle_model_arg_adds_model_flag(monkeypatch):
+    captured, tg = _handle_and_capture(monkeypatch, "/open opus")
+    assert captured["args"][-3:] == ["claude", "--model", "opus"]
+    assert "opus" in tg.sent[-1]
+
+
+def test_handle_bare_open_no_model_flag(monkeypatch):
+    captured, tg = _handle_and_capture(monkeypatch, "/open")
+    assert captured["args"][-1] == "claude"
+    assert "--model" not in captured["args"]
+
+
+def test_handle_glm_arg_no_model_flag(monkeypatch):
+    captured, tg = _handle_and_capture(monkeypatch, "/open glm")
+    assert captured["args"][-1] == "claude"
+    assert "GLM" in tg.sent[-1]
