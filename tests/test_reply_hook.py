@@ -1,9 +1,8 @@
-"""marker_guard_hook 순수 로직 테스트. [A.D.H.D] 인입 turn 에서 응답 마커 누락 감지."""
-from imadhd.hooks.marker_guard_hook import (
+"""reply_hook 순수 로직 테스트. 마커 인입 turn 에서 응답 마커 누락 감지."""
+from imadhd.hooks.reply_hook import (
     marker_missing,
-    last_user_text,
-    last_assistant_text,
-    is_external_user_message,
+    last_user_text_from_entries,
+    _is_external_user_message,
 )
 
 MARKER = "[A.D.H.D]"
@@ -48,21 +47,12 @@ def test_last_user_text_skips_tool_result_only_round():
         _user_tool_result_only(),
         _assistant("작업 끝"),
     ]
-    assert MARKER in last_user_text(entries)
-
-
-def test_last_assistant_text_picks_latest():
-    entries = [
-        _assistant("첫 응답"),
-        _user("추가 요청"),
-        _assistant(f"최종 응답 {MARKER}"),
-    ]
-    assert last_assistant_text(entries) == f"최종 응답 {MARKER}"
+    assert MARKER in last_user_text_from_entries(entries)
 
 
 def test_is_external_user_message_true_for_text():
-    assert is_external_user_message(_user("안녕")) is True
+    assert _is_external_user_message(_user("안녕")) is True
 
 
 def test_is_external_user_message_false_for_tool_result_only():
-    assert is_external_user_message(_user_tool_result_only()) is False
+    assert _is_external_user_message(_user_tool_result_only()) is False
