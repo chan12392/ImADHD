@@ -1,6 +1,13 @@
 """Stop 훅: CC 응답 종료 → transcript 마지막 assistant 답변 읽기 →
 마커 감지 → 회신 (session_id→번호 역조회, 숫자이모지 붙여 전송).
 
+인입(inject_command 가 주입한) 메시지엔 마커가 있는데 CC 응답 마지막 줄에
+마커가 없으면(CLAUDE.md 규칙을 깜빡함) 조용히 통과하지 않고 Stop 을
+block 해서 마커를 다시 출력하게 한다 — 작업은 끝났는데 회신만 안 가는
+silent failure 방지(2026-07-04 실사고: 마커 누락으로 텔레그램 회신
+자체가 안 감. channel-reply-guard.py 와 동일 패턴을 이 훅에 흡수해
+별도 Stop 훅 프로세스를 추가하지 않음).
+
 stdin: CC hook payload JSON (session_id, transcript_path, stop_hook_active).
 stop_hook_active=True 면 통과(무한루프 방지).
 """
@@ -8,6 +15,86 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+
+
+def _get_role(entry: dict) -> str | None:
+    msg = entry.get("message") if isinstance(entry, dict) else None
+    if isinstance(msg, dict):
+        return msg.get("role")
+    return entry.get("role") if isinstance(entry, dict) else None
+
+
+def _get_content(entry: dict):
+    msg = entry.get("message") if isinstance(entry, dict) else None
+    if isinstance(msg, dict):
+        return msg.get("content")
+    return entry.get("content") if isinstance(entry, dict) else None
+
+
+def _extract_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return "\n".join(parts)
+    return ""
+
+
+def _is_external_user_message(entry: dict) -> bool:
+    """tool_result 만 있는 user round(API 왕복)는 실제 사용자 발화가 아니므로 제외."""
+    if _get_role(entry) != "user":
+        return False
+    content = _get_content(entry)
+    if isinstance(content, str):
+        return True
+    if isinstance(content, list):
+        return any(
+            isinstance(b, dict) and b.get("type") in ("text", "image")
+            for b in content
+        )
+    return False
+
+
+def last_user_text_from_entries(entries: list) -> str:
+    for entry in reversed(entries):
+        if _is_external_user_message(entry):
+            return _extract_text(_get_content(entry))
+    return ""
+
+
+def _read_entries(transcript_path: str) -> list:
+    p = Path(transcript_path)
+    if not p.exists():
+        return []
+    entries = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+    return entries
+
+
+def last_nonempty_line(text: str) -> str:
+    for line in reversed((text or "").splitlines()):
+        if line.strip():
+            return line
+    return ""
+
+
+def marker_missing(user_text: str, assistant_text: str, marker: str) -> bool:
+    """마지막 user 발화에 마커가 있는데(=마커 인입 turn) 마지막 assistant
+    응답의 마지막 줄에 마커가 없으면 True(=차단 대상)."""
+    if marker not in user_text:
+        return False  # 마커 인입 turn 아님 — 일반 터미널 작업, 강제 X
+    return marker not in last_nonempty_line(assistant_text)
 
 
 def main() -> int:
@@ -46,6 +133,15 @@ def main() -> int:
 
     # 회신(텔레그램 전송)은 마커 있을 때만. idle 복귀는 위에서 마커 무관 처리.
     if not mc.should_reply(rp):
+        entries = _read_entries(transcript_path)
+        user_text = last_user_text_from_entries(entries)
+        if marker_missing(user_text, text, s.reply_marker):
+            reason = (
+                f"[imadhd] {s.reply_marker} 인입 turn인데 응답 마지막 줄에 "
+                f"{s.reply_marker} 없음 → 텔레그램 회신 안 감. "
+                f"응답 마지막 줄에 {s.reply_marker} 다시 출력."
+            )
+            sys.stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n")
         return 0
     body = mc.build_text(rp)
 
