@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -172,5 +174,18 @@ class TelegramClient:
             return 0
 
     def _save_offset(self, offset: int) -> None:
+        """원자적 쓰기(임시파일+os.replace). write_text 직접 쓰기는 pm2 강제
+        재시작 등으로 쓰기 도중 죽으면 파일이 손상돼 _load_offset 이 0으로
+        폴백 → 이미 처리한 업데이트를 재수신(중복 주입) 할 수 있다."""
         self.offset_path.parent.mkdir(parents=True, exist_ok=True)
-        self.offset_path.write_text(str(offset), encoding="utf-8")
+        fd, tmp = tempfile.mkstemp(dir=str(self.offset_path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(offset))
+            os.replace(tmp, self.offset_path)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
