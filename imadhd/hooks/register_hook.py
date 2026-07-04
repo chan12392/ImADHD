@@ -156,18 +156,17 @@ def main() -> int:
         return 0
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
 
-    # 죽은 슬롯 정리: CC pid(claude.exe) 없으면 release (고아 슬롯 누적 방지).
-    # pid 가 CC pid 이므로 CC 종료 시 정확 감지(터미널 pid 였던 구버그 수정).
+    # 죽은 슬롯 정리: transport.is_alive 로 판정(router 의 sweep 과 동일 로직 공유).
+    # 과거엔 여기서 proc_win.exists(pid) 로 "존재만" 확인했는데, PID 재사용 시
+    # exe 이름 검증 없이 다른 프로세스를 CC 로 오인할 수 있었다(router 쪽은
+    # name_of(pid)=="claude.exe" 로 이미 더 엄격하게 판정 중이었음 — 두 판정기가
+    # 서로 다른 기준으로 같은 슬롯을 흔드는 것을 방지하기 위해 통일).
     try:
-        from ..core.proc_win import exists as _proc_exists
-        import ctypes
-        user32 = ctypes.windll.user32
+        from ..transports import make_transport
+        transport = make_transport(s.transport)
 
         def _alive(info):
-            if _proc_exists(info.pid):
-                return True
-            # CC pid 모르는(구) 슬롯: hwnd 라도 죽었으면 정리.
-            return bool(info.hwnd and user32.IsWindow(info.hwnd))
+            return transport.is_alive(info.to_dict())
 
         removed = reg.sweep_dead(_alive)
         if removed:

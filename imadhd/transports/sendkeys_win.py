@@ -126,7 +126,14 @@ class SendKeysWinTransport(Transport):
                     note="best-effort; 도달 미보장(Windows Terminal 자식창엔 안 닿을 수 있음)",
                     rediscovered_hwnd=rediscovered,
                 )
-        self._focus_type(hwnd, text)
+        focus_ok = self._focus_type(hwnd, text)
+        if not focus_ok:
+            # 포커스 탈취 실패해도 텍스트는 이미 타이핑됐다 — 엉뚱한(이전 활성) 창에
+            # 들어갔을 수 있음. 조용히 성공 보고하면 대표님이 "왜 반응이 없지"로
+            # 오인할 뿐 원인을 못 찾는다(2026-07-04 발견). delivered=False 로 표시.
+            return InjectResult(delivered=False, method="focus",
+                                note="포커스 확보 실패 — 다른 창에 입력됐을 수 있음",
+                                rediscovered_hwnd=rediscovered)
         return InjectResult(delivered=True, method="focus", note="포커스 강제 입력",
                             rediscovered_hwnd=rediscovered)
 
@@ -146,9 +153,13 @@ class SendKeysWinTransport(Transport):
             if not hwnd or not user32.IsWindow(hwnd):
                 return InjectResult(delivered=False, method="none",
                                     note="hwnd invalid/dead (console 재탐색 실패)")
-        self._acquire_focus(hwnd)
+        focus_ok = self._acquire_focus(hwnd)
         user32.keybd_event(int(vk), 0, 0, 0)
         user32.keybd_event(int(vk), 0, KEYEVENTF_KEYUP, 0)
+        if not focus_ok:
+            return InjectResult(delivered=False, method="focus-vk",
+                                note=f"포커스 확보 실패(vk=0x{vk:02X}) — 다른 창에 전달됐을 수 있음",
+                                rediscovered_hwnd=rediscovered)
         return InjectResult(delivered=True, method="focus-vk", note=f"vk=0x{vk:02X}",
                             rediscovered_hwnd=rediscovered)
 
@@ -163,12 +174,15 @@ class SendKeysWinTransport(Transport):
         except Exception:
             return False
 
-    def _focus_type(self, hwnd, text: str) -> None:
-        self._acquire_focus(hwnd)
+    def _focus_type(self, hwnd, text: str) -> bool:
+        focus_ok = self._acquire_focus(hwnd)
         _type_unicode(text)
+        return focus_ok
 
     def _acquire_focus(self, hwnd) -> bool:
-        """hwnd 포커스 강제 확보. 텍스트 주입/가상키 전송 공통 선행. 반환=SetForegroundWindow 결과."""
+        """hwnd 포커스 강제 확보. 텍스트 주입/가상키 전송 공통 선행.
+        반환=실제 전경창이 hwnd 로 바뀌었는지(after_fg == hwnd) — SetForegroundWindow
+        의 반환값 자체는 항상 정확하지 않아 GetForegroundWindow 재확인이 더 신뢰도 높음."""
         kernel32 = ctypes.windll.kernel32
         SW_RESTORE = 9
         if user32.IsIconic(hwnd):
@@ -194,8 +208,9 @@ class SendKeysWinTransport(Transport):
             user32.BringWindowToTop(hwnd)
             time.sleep(0.4)
             after_fg = user32.GetForegroundWindow() or 0
-            _diag_log(f"focus hwnd={hwnd} SetFG={ok} attached={attached} fg_before={fg_now} fg_after={after_fg} match={after_fg == hwnd}")
-            return bool(ok)
+            matched = after_fg == hwnd
+            _diag_log(f"focus hwnd={hwnd} SetFG={ok} attached={attached} fg_before={fg_now} fg_after={after_fg} match={matched}")
+            return matched
         finally:
             if attached:
                 user32.AttachThreadInput(tid_self, tid_fg, False)

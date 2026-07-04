@@ -70,3 +70,7 @@ class Settings:
     @property
     def offset_path(self) -> Path:
         return self.data_dir / "offset.txt"
+
+    @property
+    def heartbeat_path(self) -> Path:
+        return self.data_dir / "heartbeat.txt"

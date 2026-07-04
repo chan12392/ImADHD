@@ -7,12 +7,34 @@ from __future__ import annotations
 
 import logging
 import time
+import urllib.error
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..config import Settings
 
 log = logging.getLogger("imadhd")
+
+
+def classify_getupdates_error(exc: Exception) -> tuple[str, float]:
+    """getUpdates 예외를 (action, wait_seconds) 로 분류.
+
+    action="stop": 재시도해도 절대 해결 안 되는 실패(토큰 무효/봇 차단) —
+    무한 재시도로 "죽었는데 살아있는 척"하며 조용히 멈추는 것보다(2026-07-04
+    8시간 정지 사고와 같은 계열) 예외를 올려 프로세스를 종료시켜 pm2 재시작
+    카운트로 이상 신호가 눈에 띄게 한다.
+    action="wait": 그 외(네트워크 일시 오류, 429 등) — wait_seconds 만큼
+    대기 후 재시도."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (401, 403):
+            return "stop", 0.0
+        if exc.code == 429:
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            try:
+                return "wait", float(retry_after)
+            except (TypeError, ValueError):
+                return "wait", 5.0
+    return "wait", 5.0
 
 
 def run(settings: "Settings") -> None:
@@ -138,6 +160,14 @@ def run(settings: "Settings") -> None:
         log.warning("init board refresh failed: %s", e)
 
     while True:
+        # heartbeat: ask_hook 이 이 파일 신선도로 router 생존을 추정해 죽어있으면
+        # 최대 대기(280s)를 다 채우지 않고 조기에 네이티브 UI 로 폴백한다
+        # (2026-07-04 실사고: router 좀비 상태를 훅이 알 방법이 없었음).
+        try:
+            settings.heartbeat_path.write_text(str(time.time()), encoding="utf-8")
+        except Exception:
+            pass
+
         # 감시: 죽은 슬롯 정리 + 공지 갱신.
         # 종료 알림은 채팅이 지저분해져 생략(상태 보드/​핀 + /list 로 확인).
         try:
@@ -150,8 +180,12 @@ def run(settings: "Settings") -> None:
         try:
             updates = tg.get_updates(timeout=15)
         except Exception as e:
-            log.warning("getUpdates failed: %s — retry in 5s", e)
-            time.sleep(5)
+            action, wait = classify_getupdates_error(e)
+            if action == "stop":
+                log.error("getUpdates auth failed(재시도 무의미): %s — 프로세스 종료", e)
+                raise
+            log.warning("getUpdates failed: %s — retry in %.1fs", e, wait)
+            time.sleep(wait)
             continue
 
         for upd in updates:

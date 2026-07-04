@@ -32,6 +32,25 @@ from pathlib import Path
 # 답 대기 최대(초). CC hook timeout(300000ms=300s) 보다 여유.
 DEFAULT_TIMEOUT = float(os.environ.get("IMADHD_ASK_TIMEOUT", "280"))
 POLL_INTERVAL = 1.0
+# router heartbeat 갱신 주기(15s 롱폴 + sweep)보다 넉넉한 임계값. 이보다 오래
+# heartbeat 가 안 갱신되면 router 가 죽었다고 보고 280s 다 기다리지 않는다.
+HEARTBEAT_MAX_AGE = 40.0
+HEARTBEAT_CHECK_INTERVAL = 5.0
+
+
+def router_alive(data_dir, max_age: float = HEARTBEAT_MAX_AGE) -> bool:
+    """router heartbeat 파일 신선도로 생존 추정.
+
+    2026-07-04 실사고: router 가 좀비 상태(pm2 는 online 으로 표시, 실제 폴링
+    루프는 멈춤)였는데 이 훅이 그 사실을 알 방법이 없어 매번 최대 280초를
+    다 기다린 뒤에야 timeout-deny 됐다. heartbeat 파일이 없으면(구버전 router
+    등) 판단을 보류하고 True(기존 동작 유지) — 오탐으로 정상 대기를 끊지 않는다."""
+    try:
+        p = Path(data_dir) / "heartbeat.txt"
+        ts = float(p.read_text(encoding="utf-8").strip())
+        return (time.time() - ts) < max_age
+    except Exception:
+        return True
 
 
 def _debug_log(line: str) -> None:
@@ -188,7 +207,9 @@ def main() -> int:
     # 답 대기(폴링) — router 가 callback 로 items[].answer 를 채운다.
     deadline = time.monotonic() + DEFAULT_TIMEOUT
     answered = False
+    router_dead = False
     cur = record
+    last_hb_check = 0.0
     while time.monotonic() < deadline:
         time.sleep(POLL_INTERVAL)
         cur = ask_manager.load_record(s.data_dir, ask_id)
@@ -197,6 +218,13 @@ def main() -> int:
             ask_manager.write_record(s.data_dir, cur)
             answered = True
             break
+        now = time.monotonic()
+        if now - last_hb_check >= HEARTBEAT_CHECK_INTERVAL:
+            last_hb_check = now
+            if not router_alive(s.data_dir):
+                _debug_log(f"[ask] router heartbeat stale ask_id={ask_id} — 조기 timeout")
+                router_dead = True
+                break
 
     if answered:
         answers = ask_manager.record_answers(cur)
@@ -216,23 +244,23 @@ def main() -> int:
     cur = ask_manager.load_record(s.data_dir, ask_id) or record
     cur["status"] = "timeout"
     ask_manager.write_record(s.data_dir, cur)
-    _debug_log(f"[ask] timeout ask_id={ask_id}")
+    if router_dead:
+        _debug_log(f"[ask] timeout(router_dead) ask_id={ask_id}")
+        wait_msg = "router 응답 없음(재시작 필요할 수 있음). 터미널에서 직접 응답하거나 다시 질문하세요."
+        deny_reason = "router 응답 없음(재시작 필요할 수 있음). 터미널에서 직접 응답하거나 다시 질문."
+    else:
+        _debug_log(f"[ask] timeout ask_id={ask_id}")
+        wait_msg = f"응답 시간초과({int(DEFAULT_TIMEOUT)}s). 터미널에서 직접 응답하거나 다시 질문하세요."
+        deny_reason = f"텔레그램 응답 시간초과({int(DEFAULT_TIMEOUT)}s). 터미널에서 직접 응답하거나 다시 질문."
     try:
-        tg.send(
-            chat_id,
-            f"{prefix}⏰ 응답 시간초과({int(DEFAULT_TIMEOUT)}s). "
-            "터미널에서 직접 응답하거나 다시 질문하세요.",
-        )
+        tg.send(chat_id, f"{prefix}⏰ {wait_msg}")
     except Exception:
         pass
     _emit({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "reason": (
-                f"텔레그램 응답 시간초과({int(DEFAULT_TIMEOUT)}s). "
-                "터미널에서 직접 응답하거나 다시 질문."
-            ),
+            "reason": deny_reason,
         }
     })
     return 0
