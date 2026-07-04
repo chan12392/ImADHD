@@ -22,6 +22,7 @@ class FakeTG:
 
 class FakeSettings:
     reply_marker = "[A.D.H.D]"
+    data_dir = None  # 각 테스트에서 tmp_path 로 주입(마커 플래그 파일 경로용)
 
 
 def test_inject_dead_terminal_releases_slot(tmp_path):

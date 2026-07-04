@@ -178,7 +178,7 @@ def run(settings: "Settings") -> None:
 
         # 텔레그램 롱폴
         try:
-            updates = tg.get_updates(timeout=15)
+            updates = tg.get_updates(timeout=5)
         except Exception as e:
             action, wait = classify_getupdates_error(e)
             if action == "stop":

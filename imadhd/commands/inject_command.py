@@ -8,19 +8,43 @@
 """
 from __future__ import annotations
 
+import datetime
 import re
 import time
+from pathlib import Path
 
 from .base import Command, Message, CommandContext
+
+# register(SessionStart) 직후 CC REPL 이 아직 입력을 못 받는 초기화 구간이
+# 있다(2026-07-05 실사고: 새 세션 열자마자 즉시 주입하면 텍스트+Enter 가
+# 씹히고 실제 user/assistant 턴 없이 Stop 훅만 헛되게 발동 → transcript
+# 파일 자체가 안 생기고 세션이 dead-end 됨). 세션 시작 후 이 유예시간
+# 안에는 주입 전 남은 시간만큼 대기.
+READY_GRACE_SEC = 2.5
 
 
 def _debug_log(line: str) -> None:
     try:
-        from pathlib import Path
         p = Path.home() / ".imadhd" / "debug.log"
         p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def mark_marker_pending(data_dir, session_id: str) -> None:
+    """주입 = 항상 [A.D.H.D] 마커 턴. reply_hook 이 Stop 시점에 transcript 를
+    다시 읽어 "마커 턴인지" 재판정하면 cold-start 로 transcript flush 가
+    늦을 때(2026-07-05 실사고: session=0d38e2b2, exists=False 로 빠져
+    "마커 턴 아님" 오판 → 회신 유실) 놓친다. 주입 시점에 파일로 미리
+    남겨 transcript 상태와 무관하게 판정 가능하게 한다."""
+    if not session_id or not data_dir:
+        return
+    try:
+        d = Path(data_dir) / "marker_pending"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / session_id).write_text(str(time.time()), encoding="utf-8")
     except Exception:
         pass
 
@@ -97,6 +121,15 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
         ctx.registry.release(num)
         ctx.telegram.send(chat_id, f"❌ {num}번 터미널 종료")
         return
+    try:
+        started = datetime.datetime.fromisoformat(info.started_at)
+        elapsed = (datetime.datetime.now() - started).total_seconds()
+        if 0 <= elapsed < READY_GRACE_SEC:
+            wait = READY_GRACE_SEC - elapsed
+            _debug_log(f"[inject] num={num} ready-grace wait={wait:.2f}s (elapsed={elapsed:.2f}s)")
+            time.sleep(wait)
+    except Exception:
+        pass
     _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]}")
     # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
     body = _normalize_question(" ".join(body.split()) or "(빈 입력)")
@@ -104,6 +137,7 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     # CC 규칙이 자동으로 "1~2문장 짧게 답 + 마지막 줄에 [A.D.H.D] 출력" 수행.
     inject_text = f"{body} [A.D.H.D]"
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
+    mark_marker_pending(ctx.settings.data_dir, info.session_id)
     result = ctx.transport.inject(info.to_dict(), inject_text)
     # transport 가 InjectResult(진짜) 반환 시에만 복구 처리. 테스트 FakeTransport(None) 방어.
     new_hwnd = getattr(result, "rediscovered_hwnd", None)

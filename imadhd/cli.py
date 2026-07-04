@@ -25,6 +25,11 @@ def router_main() -> int:
     return 0
 
 
+def watchdog_main() -> int:
+    from .watchdog import watchdog_main as _run
+    return _run()
+
+
 def register_main() -> int:
     from .hooks import register_hook
     return register_hook.main()
@@ -92,4 +97,5 @@ def adhd_main() -> int:
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "router"
     sys.exit({"router": router_main, "register": register_main, "reply": reply_main,
-              "adhd": adhd_main, "install": install_main}.get(cmd, router_main)())
+              "adhd": adhd_main, "install": install_main,
+              "watchdog": watchdog_main}.get(cmd, router_main)())
