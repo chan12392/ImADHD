@@ -148,7 +148,12 @@ def main() -> int:
     from ..core.registry import JSONFileRegistry
     from ..telegram_api.client import TelegramClient
 
-    s = Settings.load()
+    # 설정 미구성/일시 오독(.env 등) → 세션 등록만 스킵, CC 세션 시작은 막지 않음.
+    try:
+        s = Settings.load()
+    except Exception as e:
+        _debug_log(f"[register] settings load failed: {e!r} — skip registration")
+        return 0
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
 
     # 죽은 슬롯 정리: CC pid(claude.exe) 없으면 release (고아 슬롯 누적 방지).

@@ -5,9 +5,12 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import msvcrt
 import os
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -68,9 +71,42 @@ class JSONFileRegistry(Registry):
     def __init__(self, path, max_slots: int = 6):
         self.path = Path(path)
         self.max_slots = max_slots
+        self.lock_path = self.path.with_name(self.path.name + ".lock")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             self._write({})
+
+    @contextlib.contextmanager
+    def _locked(self, timeout: float = 5.0):
+        """배타 파일 락(Windows msvcrt). read-modify-write 구간을 프로세스 간
+        직렬화해 SessionStart/Stop/UserPromptSubmit 훅이 거의 동시에 registry.json
+        을 고치다 서로의 변경을 통째로 덮어쓰는 lost update 를 막는다
+        (2026-07-04 session_id 덮어쓰기 사고와 같은 계열의 근본원인).
+        락 획득 실패해도 timeout 후 그냥 진행 — 훅이 영구히 멈추는 것보다
+        드문 레이스가 낫다(가용성 우선)."""
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(self.lock_path, "a+b")
+        locked = False
+        try:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() > deadline:
+                        break
+                    time.sleep(0.05)
+            yield
+        finally:
+            if locked:
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            f.close()
 
     def _read(self) -> dict:
         try:
@@ -97,26 +133,27 @@ class JSONFileRegistry(Registry):
         return {int(k) for k, v in data.items() if v}
 
     def claim_slot(self, session_id, hwnd, pid, cwd, started_at):
-        data = self._read()
-        # 동일 session_id OR 동일 pid(CC 프로세스) → 기존 슬롯 재사용(덮어쓰기).
-        # /resume·세션재개 로 session_id 가 바뀌어도 같은 CC(pid)면 같은 슬롯 유지.
-        # 안 하면 같은 터미널이 session 변경마다 새 슬롯 점유 → "터미널 1개인데 N번 2개" 중복.
-        for k, v in data.items():
-            if v and (v.get("session_id") == session_id or v.get("pid") == pid):
-                num = int(k)
-                # 방어: 빈 session_id 호출(비정상/테스트성 훅 실행)이 pid 매칭만으로
-                # 기존 슬롯의 정상 session_id 를 지우면 Stop 훅의 find_by_session 이
-                # 끊겨 상태가 busy 로 영구 고정된다. 새 값이 비어 있으면 기존 값 보존.
-                effective_id = session_id or v.get("session_id", "")
-                data[k] = SessionInfo(num, effective_id, hwnd, pid, cwd, started_at).to_dict()
-                self._write(data)
-                return num
-        free = lowest_free(self._occupied(data), self.max_slots)
-        if free is None:
-            return None
-        data[str(free)] = SessionInfo(free, session_id, hwnd, pid, cwd, started_at).to_dict()
-        self._write(data)
-        return free
+        with self._locked():
+            data = self._read()
+            # 동일 session_id OR 동일 pid(CC 프로세스) → 기존 슬롯 재사용(덮어쓰기).
+            # /resume·세션재개 로 session_id 가 바뀌어도 같은 CC(pid)면 같은 슬롯 유지.
+            # 안 하면 같은 터미널이 session 변경마다 새 슬롯 점유 → "터미널 1개인데 N번 2개" 중복.
+            for k, v in data.items():
+                if v and (v.get("session_id") == session_id or v.get("pid") == pid):
+                    num = int(k)
+                    # 방어: 빈 session_id 호출(비정상/테스트성 훅 실행)이 pid 매칭만으로
+                    # 기존 슬롯의 정상 session_id 를 지우면 Stop 훅의 find_by_session 이
+                    # 끊겨 상태가 busy 로 영구 고정된다. 새 값이 비어 있으면 기존 값 보존.
+                    effective_id = session_id or v.get("session_id", "")
+                    data[k] = SessionInfo(num, effective_id, hwnd, pid, cwd, started_at).to_dict()
+                    self._write(data)
+                    return num
+            free = lowest_free(self._occupied(data), self.max_slots)
+            if free is None:
+                return None
+            data[str(free)] = SessionInfo(free, session_id, hwnd, pid, cwd, started_at).to_dict()
+            self._write(data)
+            return free
 
     def get(self, number: int) -> Optional[SessionInfo]:
         data = self._read()
@@ -131,41 +168,45 @@ class JSONFileRegistry(Registry):
         return None
 
     def release(self, number: int) -> bool:
-        data = self._read()
-        key = str(number)
-        if key in data and data[key]:
-            data[key] = None
-            self._write(data)
-            return True
-        return False
+        with self._locked():
+            data = self._read()
+            key = str(number)
+            if key in data and data[key]:
+                data[key] = None
+                self._write(data)
+                return True
+            return False
 
     def set_status(self, number: int, status: str) -> bool:
-        data = self._read()
-        v = data.get(str(number))
-        if v:
-            v["status"] = status
-            self._write(data)
-            return True
-        return False
-
-    def set_status_by_session(self, session_id: str, status: str) -> bool:
-        data = self._read()
-        for v in data.values():
-            if v and v.get("session_id") == session_id:
+        with self._locked():
+            data = self._read()
+            v = data.get(str(number))
+            if v:
                 v["status"] = status
                 self._write(data)
                 return True
-        return False
+            return False
+
+    def set_status_by_session(self, session_id: str, status: str) -> bool:
+        with self._locked():
+            data = self._read()
+            for v in data.values():
+                if v and v.get("session_id") == session_id:
+                    v["status"] = status
+                    self._write(data)
+                    return True
+            return False
 
     def set_hwnd(self, number: int, hwnd: int) -> bool:
         """해당 슬롯의 hwnd 만 갱신. status 보존(stale hwnd 복구 후에도 busy 유지)."""
-        data = self._read()
-        v = data.get(str(number))
-        if v:
-            v["hwnd"] = int(hwnd)
-            self._write(data)
-            return True
-        return False
+        with self._locked():
+            data = self._read()
+            v = data.get(str(number))
+            if v:
+                v["hwnd"] = int(hwnd)
+                self._write(data)
+                return True
+            return False
 
     def active(self) -> list[SessionInfo]:
         data = self._read()
@@ -177,13 +218,14 @@ class JSONFileRegistry(Registry):
         return out
 
     def sweep_dead(self, is_alive: Callable[["SessionInfo"], bool]) -> int:
-        data = self._read()
-        removed = 0
-        for k in list(data.keys()):
-            v = data[k]
-            if v and not is_alive(SessionInfo(**v)):
-                data[k] = None
-                removed += 1
-        if removed:
-            self._write(data)
-        return removed
+        with self._locked():
+            data = self._read()
+            removed = 0
+            for k in list(data.keys()):
+                v = data[k]
+                if v and not is_alive(SessionInfo(**v)):
+                    data[k] = None
+                    removed += 1
+            if removed:
+                self._write(data)
+            return removed
