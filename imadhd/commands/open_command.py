@@ -50,10 +50,22 @@ def _wt_path() -> str:
 
 
 def build_open_env(base_env: dict, use_glm: bool) -> dict:
-    """새 claude 프로세스에 넘길 env 구성. use_glm=False 면 z.ai 프록시 키 제거."""
+    """새 claude 프로세스에 넘길 env 구성. use_glm=False 면 z.ai 프록시 키 제거.
+
+    router(pm2) 자체가 CC 터미널 안에서 `pm2 start` 로 기동된 이력이 있어
+    CLAUDECODE=1 / CLAUDE_CODE_SESSION_ID(고정된 옛 부모 세션) /
+    CLAUDE_CODE_CHILD_SESSION=1 같은 "나는 CC의 nested child 세션이다"
+    identity env 를 그대로 물려받는다. 이걸 새로 띄우는 claude 프로세스에
+    그대로 넘기면 그 프로세스가 옛 고정 세션의 자식으로 오인해 자기
+    transcript 를 정상적으로 디스크에 남기지 않는다(2026-07-05 실사고:
+    /open 으로 연 터미널만 텔레그램 회신 안 감 — transcript .jsonl 자체가
+    끝까지 생성 안 됨. 수동으로 연 터미널은 이 env 오염이 없어 정상)."""
     env = dict(base_env)
     if not use_glm:
         for k in _ANTHROPIC_PROXY_ENV_KEYS:
+            env.pop(k, None)
+    for k in list(env):
+        if k == "AI_AGENT" or k.startswith("CLAUDE"):
             env.pop(k, None)
     return env
 
