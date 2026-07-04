@@ -16,6 +16,7 @@ HELP_TEXT = (
     "• /new N — N번 터미널 새 대화(/clear)\n"
     "• /open — 새 터미널 생성(Anthropic 공식)\n"
     "• /open glm — 새 터미널 생성(z.ai GLM)\n"
+    "• /open <모델명> — 그 모델로 새 터미널(예: /open opus)\n"
     "• /close N — N번 터미널 닫기\n"
     "• /stop N — N번 작업 중단(ESC)\n"
     "• /pin — 상태 보드 핀 새로고침\n"
