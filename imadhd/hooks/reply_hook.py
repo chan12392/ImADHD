@@ -15,7 +15,18 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
+
+# Stop 훅 실행 시점에 transcript jsonl 이 아직 디스크에 flush 안 된 레이스가
+# 있다(2026-07-05 실사고: exists=False, text_len=0 으로 빠져 should_reply=False
+# → 마커 있어도 텔레그램 회신 자체가 스킵됨). 파일 나타날 때까지 짧게 재시도.
+TRANSCRIPT_RETRY_SEC = 8.0
+TRANSCRIPT_RETRY_INTERVAL_SEC = 0.2
+
+# marker_pending 플래그 유효기간(초). 이보다 오래된 파일은 죽은 세션의
+# 잔재로 간주하고 무시+삭제(무한 누적 방지).
+MARKER_PENDING_TTL_SEC = 3600.0
 
 
 def _get_role(entry: dict) -> str | None:
@@ -97,18 +108,112 @@ def marker_missing(user_text: str, assistant_text: str, marker: str) -> bool:
     return marker not in last_nonempty_line(assistant_text)
 
 
+def _marker_pending_path(data_dir, session_id: str) -> Path:
+    return Path(data_dir) / "marker_pending" / session_id
+
+
+def has_marker_pending(data_dir, session_id: str) -> bool:
+    """inject_command.mark_marker_pending 이 남긴 플래그 확인.
+
+    transcript 를 못 읽어도(cold-start flush 지연) "이 세션은 텔레그램
+    inject 로 시작된 마커 턴"이라는 사실 자체는 이 파일로 독립적으로
+    안다 — 2026-07-05 실사고(session=0d38e2b2) 재발 방지."""
+    if not session_id:
+        return False
+    p = _marker_pending_path(data_dir, session_id)
+    try:
+        if not p.exists():
+            return False
+        age = time.time() - float(p.read_text(encoding="utf-8").strip() or "0")
+        if age > MARKER_PENDING_TTL_SEC:
+            p.unlink(missing_ok=True)
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def clear_marker_pending(data_dir, session_id: str) -> None:
+    if not session_id:
+        return
+    try:
+        _marker_pending_path(data_dir, session_id).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _debug_log(line: str) -> None:
+    try:
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
+def _resolve_transcript_path(transcript_path: str, session_id: str) -> Path:
+    """전달받은 transcript_path 가 아직 없으면 session_id 로 실제 파일을 재탐색.
+
+    CC가 SessionStart/Stop 훅에 넘기는 transcript_path 는 파일이 flush 되기
+    전 시점 값일 수 있다. 같은 session_id.jsonl 이 다른 하위경로에 이미
+    존재하는 경우도 있어 폭넓게(glob) 재탐색한다.
+    """
+    requested = Path(transcript_path)
+    if requested.is_file():
+        return requested
+    if not session_id:
+        return requested
+    root = Path.home() / ".claude" / "projects"
+    if not root.exists():
+        return requested
+    try:
+        for p in root.glob(f"*/{session_id}.jsonl"):
+            if p.is_file():
+                return p
+        for p in root.glob(f"*/{session_id}/**/*.jsonl"):
+            if p.is_file():
+                return p
+    except Exception as e:
+        _debug_log(f"[reply] transcript resolve failed session={session_id[:8]} err={e!r}")
+    return requested
+
+
+def _last_assistant_text_retry(transcript_path: str, session_id: str, reader) -> tuple[str, str, bool]:
+    deadline = time.monotonic() + TRANSCRIPT_RETRY_SEC
+    last_path = Path(transcript_path)
+    while True:
+        last_path = _resolve_transcript_path(transcript_path, session_id)
+        try:
+            text = reader(str(last_path))
+        except Exception as e:
+            _debug_log(f"[reply] transcript read failed session={session_id[:8]} path={last_path} err={e!r}")
+            text = ""
+        if text:
+            return text, str(last_path), last_path.exists()
+        if time.monotonic() >= deadline:
+            return "", str(last_path), last_path.exists()
+        time.sleep(TRANSCRIPT_RETRY_INTERVAL_SEC)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
+        _debug_log("[reply] stdin parse failed")
         return 0
-    if payload.get("stop_hook_active"):
-        return 0
+    stop_hook_active = bool(payload.get("stop_hook_active"))
 
     session_id = payload.get("session_id", "") or ""
     transcript_path = payload.get("transcript_path")
     if not transcript_path:
+        _debug_log(f"[reply] no transcript_path session={session_id[:8]}")
         return 0
+    exists = Path(transcript_path).exists()
+    _debug_log(
+        f"[reply] session={session_id[:8]} transcript={transcript_path} "
+        f"exists={exists} stop_hook_active={stop_hook_active}"
+    )
 
     from .register_hook import _last_assistant_text
     from ..config import Settings
@@ -122,9 +227,18 @@ def main() -> int:
     # (예외 미처리 시 훅이 죽어 idle 복귀도 회신도 안 되고 busy 로 영구 고정됨).
     try:
         s = Settings.load()
-    except Exception:
+    except Exception as e:
+        _debug_log(f"[reply] Settings.load failed: {e!r}")
         return 0
-    text = _last_assistant_text(transcript_path)
+    text, resolved_transcript_path, resolved_exists = _last_assistant_text_retry(
+        transcript_path, session_id, _last_assistant_text
+    )
+    if resolved_transcript_path != transcript_path or resolved_exists != exists:
+        _debug_log(
+            f"[reply] resolved transcript session={session_id[:8]} "
+            f"from={transcript_path} to={resolved_transcript_path} exists={resolved_exists}"
+        )
+    transcript_path = resolved_transcript_path
     mc = MarkerCapture(s.reply_marker)
     rp = ReplyPayload(session_id, transcript_path, text)
 
@@ -135,22 +249,56 @@ def main() -> int:
         inv = {v: k for k, v in EMOJI_TO_NUM.items()}
         emoji = inv.get(info.number, f"[{info.number}]")
         reg.set_status_by_session(session_id, "idle")   # 작업 완료 → ⭕ 복귀 (마커 무관 — 터미널 직접 작업도 busy_hook 진입했으면 복귀)
+    else:
+        _debug_log(f"[reply] no registry match session={session_id[:8]}")
 
+    should = mc.should_reply(rp)
+    _debug_log(
+        f"[reply] session={session_id[:8]} text_len={len(text)} "
+        f"last_line={last_nonempty_line(text)!r} should_reply={should}"
+    )
     # 회신(텔레그램 전송)은 마커 있을 때만. idle 복귀는 위에서 마커 무관 처리.
-    if not mc.should_reply(rp):
+    if not should:
+        if not text:
+            _debug_log(
+                f"[reply] no assistant text after retry session={session_id[:8]} "
+                f"transcript={transcript_path} exists={Path(transcript_path).exists()}"
+            )
+        pending_flag = has_marker_pending(s.data_dir, session_id)
+        if stop_hook_active:
+            # block 재요청 후 재시도 턴인데도 여전히 마커 없음 — 무한루프
+            # 방지 위해 더 이상 block 하지 않고 조용히 포기(회신 유실은
+            # 감수해도 hang 보다 낫다).
+            _debug_log(
+                f"[reply] stop_hook_active=True, still no marker, giving up "
+                f"session={session_id[:8]} pending_flag={pending_flag}"
+            )
+            clear_marker_pending(s.data_dir, session_id)
+            return 0
         entries = _read_entries(transcript_path)
         user_text = last_user_text_from_entries(entries)
-        if marker_missing(user_text, text, s.reply_marker):
+        # transcript 로 못 읽어도(cold-start flush 지연) inject 시점 플래그로
+        # "마커 턴"을 판정 — user_text="" 오판으로 회신이 조용히 유실되던
+        # 버그(2026-07-05, session=0d38e2b2) 재발 방지.
+        if marker_missing(user_text, text, s.reply_marker) or pending_flag:
             reason = (
                 f"[imadhd] {s.reply_marker} 인입 turn인데 응답 마지막 줄에 "
                 f"{s.reply_marker} 없음 → 텔레그램 회신 안 감. "
                 f"응답 마지막 줄에 {s.reply_marker} 다시 출력."
             )
+            _debug_log(
+                f"[reply] blocking to re-request marker session={session_id[:8]} "
+                f"pending_flag={pending_flag}"
+            )
             sys.stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n")
+        else:
+            _debug_log(f"[reply] no reply, no block (not a marker turn) session={session_id[:8]}")
         return 0
+    clear_marker_pending(s.data_dir, session_id)
     body = mc.build_text(rp)
 
     if not s.allowed_chat_id:
+        _debug_log("[reply] no allowed_chat_id, skip send")
         return 0
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
     msg = f"{emoji} {body}".strip()
@@ -159,14 +307,16 @@ def main() -> int:
     # 변환/전송 실패 시 plain 폴백.
     try:
         tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
-    except Exception:
+        _debug_log(f"[reply] sent HTML ok session={session_id[:8]}")
+    except Exception as e1:
         # plain 폴백도 실패하면(4096자 초과 외 사유) 여기서 죽지 않고 조용히 포기.
         # 이 예외를 못 잡으면 Stop 훅 자체가 죽어 idle 복귀는 됐어도 회신이
         # 통째로 유실된다(2026-07-04 발견).
         try:
             tg.send(s.allowed_chat_id, msg)
-        except Exception:
-            pass
+            _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} (html err={e1!r})")
+        except Exception as e2:
+            _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={e1!r} plain_err={e2!r}")
     return 0
 
 
