@@ -10,6 +10,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# 텔레그램 sendMessage 텍스트 한도(4096) 대비 여유. 초과 시 400 Bad Request로
+# 통째로 실패하고, reply_hook 의 plain 폴백도 길이가 그대로라 재실패 →
+# 예외가 삼켜지지 않으면 Stop 훅이 죽어 회신 자체가 안 감(2026-07-04 발견).
+MAX_TG_TEXT = 4000
+
 
 class TelegramClient:
     def __init__(self, token: str, offset_path: Path, allowed_chat_id: str | None = None):
@@ -46,18 +51,34 @@ class TelegramClient:
 
     def send(self, chat_id: str, text: str, reply_markup: dict | None = None,
              parse_mode: str | None = None, disable_notification: bool = False) -> int | None:
-        """메시지 전송. 반환=message_id (pin 용). reply_markup=키보드. parse_mode='Markdown'|'HTML'.
-        disable_notification=True → 무음 전송(연결/종료 자동 알림용, 기기 알람 없음)."""
+        """메시지 전송. 반환=마지막 청크의 message_id (pin 용). reply_markup=키보드.
+        parse_mode='Markdown'|'HTML'. disable_notification=True → 무음 전송.
+
+        4096자 텔레그램 한도 초과 시 여러 통으로 분할. 분할된 경우 태그가 중간에
+        잘려 깨지는 것을 피하려 parse_mode 는 포기하고 plain 으로 보낸다
+        (포맷보다 전달 자체가 중요 — 2026-07-04 긴 회신이 통째로 유실된 사고 대응)."""
         if not chat_id:
             return None
-        data = {"chat_id": chat_id, "text": text,
-                "disable_notification": bool(disable_notification)}
-        if parse_mode:
-            data["parse_mode"] = parse_mode
-        if reply_markup:
-            data["reply_markup"] = reply_markup
-        resp = self._api("sendMessage", data, timeout=10)
-        return resp.get("result", {}).get("message_id")
+        if len(text) <= MAX_TG_TEXT:
+            data = {"chat_id": chat_id, "text": text,
+                    "disable_notification": bool(disable_notification)}
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+            if reply_markup:
+                data["reply_markup"] = reply_markup
+            resp = self._api("sendMessage", data, timeout=10)
+            return resp.get("result", {}).get("message_id")
+
+        chunks = [text[i:i + MAX_TG_TEXT] for i in range(0, len(text), MAX_TG_TEXT)]
+        last_id = None
+        for i, chunk in enumerate(chunks):
+            data = {"chat_id": chat_id, "text": chunk,
+                    "disable_notification": bool(disable_notification)}
+            if reply_markup and i == len(chunks) - 1:
+                data["reply_markup"] = reply_markup
+            resp = self._api("sendMessage", data, timeout=10)
+            last_id = resp.get("result", {}).get("message_id")
+        return last_id
 
     def edit_message_text(self, chat_id: str, message_id: int, text: str,
                           reply_markup: dict | None = None) -> None:

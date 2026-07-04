@@ -160,7 +160,13 @@ def main() -> int:
     try:
         tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
     except Exception:
-        tg.send(s.allowed_chat_id, msg)
+        # plain 폴백도 실패하면(4096자 초과 외 사유) 여기서 죽지 않고 조용히 포기.
+        # 이 예외를 못 잡으면 Stop 훅 자체가 죽어 idle 복귀는 됐어도 회신이
+        # 통째로 유실된다(2026-07-04 발견).
+        try:
+            tg.send(s.allowed_chat_id, msg)
+        except Exception:
+            pass
     return 0
 
 
