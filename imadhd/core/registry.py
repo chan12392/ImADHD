@@ -104,7 +104,11 @@ class JSONFileRegistry(Registry):
         for k, v in data.items():
             if v and (v.get("session_id") == session_id or v.get("pid") == pid):
                 num = int(k)
-                data[k] = SessionInfo(num, session_id, hwnd, pid, cwd, started_at).to_dict()
+                # 방어: 빈 session_id 호출(비정상/테스트성 훅 실행)이 pid 매칭만으로
+                # 기존 슬롯의 정상 session_id 를 지우면 Stop 훅의 find_by_session 이
+                # 끊겨 상태가 busy 로 영구 고정된다. 새 값이 비어 있으면 기존 값 보존.
+                effective_id = session_id or v.get("session_id", "")
+                data[k] = SessionInfo(num, effective_id, hwnd, pid, cwd, started_at).to_dict()
                 self._write(data)
                 return num
         free = lowest_free(self._occupied(data), self.max_slots)
