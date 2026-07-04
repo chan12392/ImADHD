@@ -118,7 +118,12 @@ def main() -> int:
     from ..commands.inject_command import EMOJI_TO_NUM
     from ..telegram_api.client import TelegramClient
 
-    s = Settings.load()
+    # 설정 미구성/일시 오독(.env 등) → 회신·상태갱신만 스킵. Stop 자체는 막지 않음
+    # (예외 미처리 시 훅이 죽어 idle 복귀도 회신도 안 되고 busy 로 영구 고정됨).
+    try:
+        s = Settings.load()
+    except Exception:
+        return 0
     text = _last_assistant_text(transcript_path)
     mc = MarkerCapture(s.reply_marker)
     rp = ReplyPayload(session_id, transcript_path, text)
