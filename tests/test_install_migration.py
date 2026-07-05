@@ -82,3 +82,36 @@ def test_backup_file_is_redacted(tmp_path, monkeypatch):
     assert "123456:ABC-SECRET" not in bak_text
     assert "TELEGRAM_BOT_TOKEN" not in bak_text
     assert "TELEGRAM_ALLOWED_CHAT_ID" not in bak_text
+
+
+def test_scrub_token_lines_masks_json_values():
+    """_scrub_token_lines 가 JSON 폼의 TELEGRAM 시크릿 값을 마스킹."""
+    raw = '{"env": {"TELEGRAM_BOT_TOKEN": "999:REAL-SECRET", "TELEGRAM_ALLOWED_CHAT_ID": "111222333"}}'
+    out = inst._scrub_token_lines(raw)
+    assert "999:REAL-SECRET" not in out
+    assert "111222333" not in out
+    assert "<redacted>" in out
+
+
+def test_load_settings_parse_fail_scrubs_bad_backup(tmp_path, monkeypatch):
+    """settings.json malformed/BOM → .bad-* 백업에 토큰 잔류 금지 + 원본 삭제."""
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    settings = claude_dir / "settings.json"
+    # BOM 으로 JSON parse 실패 유도 + 토큰 포함
+    settings.write_text(
+        '﻿{"env": {"TELEGRAM_BOT_TOKEN": "999:REAL-SECRET", '
+        '"TELEGRAM_ALLOWED_CHAT_ID": "111222333"}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(inst, "CLAUDE_DIR", claude_dir)
+    monkeypatch.setattr(inst, "SETTINGS_FILE", settings)
+    data = inst._load_settings()
+    assert data == {}  # parse 실패 → 빈 dict
+    assert not settings.exists()  # 원본 삭제
+    baks = list(claude_dir.glob("settings.json.bad-*"))
+    assert baks, "parse-fail 백업 생성돼야 함"
+    bak_text = baks[0].read_text(encoding="utf-8", errors="replace")
+    assert "999:REAL-SECRET" not in bak_text
+    assert "111222333" not in bak_text
+    assert "<redacted>" in bak_text
