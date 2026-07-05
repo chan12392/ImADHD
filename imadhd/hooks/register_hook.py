@@ -17,6 +17,12 @@ import sys
 from pathlib import Path
 
 
+def _capture_tmux_pane() -> str:
+    """Linux/tmux 세션 안이면 tmux 가 자동 export 하는 pane id(예: '%7') 반환.
+    tmux 밖(Windows 등)이면 빈 문자열."""
+    return os.environ.get("TMUX_PANE", "")
+
+
 def _capture_terminal() -> tuple[int, int, dict]:
     """CC 터미널 창 HWND 와 CC PID(claude.exe) 반환 + 진단 정보.
 
@@ -141,6 +147,7 @@ def main() -> int:
     cwd = payload.get("cwd", "") or os.getcwd()
 
     hwnd, pid, diag = _capture_terminal()
+    tmux_pane = _capture_tmux_pane()
     started = datetime.datetime.now().isoformat(timespec="seconds")
     _debug_log(f"[register] session={session_id[:8]} pid_self={os.getpid()} hwnd={hwnd} pid_cap={pid} diag={diag}")
 
@@ -182,7 +189,7 @@ def main() -> int:
         and existing.pid == pid
     )
 
-    num = reg.claim_slot(session_id, hwnd, pid, cwd, started)
+    num = reg.claim_slot(session_id, hwnd, pid, cwd, started, tmux_pane=tmux_pane)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
 
     # 연결 성공 알림은 채팅이 지저분해져 생략(/list 로 언제든 확인 가능).
