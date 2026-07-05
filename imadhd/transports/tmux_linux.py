@@ -105,7 +105,11 @@ def _state(target: str) -> str:
 
 
 def _wait_idle(target: str, timeout: float = 45.0) -> str:
-    """idle 될 때까지 대기. stuck(이전 주입 잔재) 은 Enter 로 한 번 복구 시도."""
+    """idle 될 때까지 대기. stuck(이전 주입 잔재) 은 Enter → (그래도 stuck)
+    → C-j 순으로 복구 시도(chleo-tg-poller.py 원본 로직 — 이 포팅에서 Enter
+    만 옮기고 C-j 폴백을 빠뜨렸던 버그를 2026-07-05 실사고로 발견해 복원.
+    Enter 만으로 안 풀리는 stuck 이 실제로 있고, 그 상태로 영구 고착되면
+    이후 모든 텔레그램 메시지가 이 pane 에 막혀 처리가 안 된다)."""
     deadline = time.time() + timeout
     rescued = False
     while time.time() < deadline:
@@ -118,6 +122,12 @@ def _wait_idle(target: str, timeout: float = 45.0) -> str:
             except Exception:
                 pass
             time.sleep(1)
+            if _state(target) == "stuck":
+                try:
+                    _run(["tmux", "send-keys", "-t", target, "C-j"])
+                except Exception:
+                    pass
+                time.sleep(1)
             rescued = True
             continue
         time.sleep(1)
