@@ -8,8 +8,9 @@
   1. status_msg (상단 핀 고정): 본문 = 상태 마크. markup 없음 → editMessageText 실시간 갱신.
   2. keyboard_msg (ReplyKeyboard): 번호만 버튼(1️⃣..6️⃣, 상태마크 없음) → 고정. edit 불필요.
 
-마크(본문): ⏳ 선택대기(pending) / 📝 작업중(busy) / ⭕ 연결(idle) / ❌ 종료(빈 슬롯)
+마크(본문): 🎯 고정타겟(sticky) / ⏳ 선택대기(pending) / 📝 작업중(busy) / ⭕ 연결(idle) / ❌ 종료(빈 슬롯)
 버튼 클릭 = 번호이모지 메시지 전송 → router 가 선두 번호 파싱 → 본문 없으면 선택대기 등록.
+🎯 = /use N 으로 고정된 슬롯(본문 자동 주입). sticky > busy > idle 시각적 우선.
 """
 from __future__ import annotations
 
@@ -53,22 +54,24 @@ class PinBoard:
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(str(mid), encoding="utf-8")
 
-    def _mark_for(self, info, num: int) -> str:
-        """슬롯 마크 우선순위: ⏳ 선택대기 > 📝 작업중 > ⭕ 연결 > ❌ 종료."""
+    def _mark_for(self, info, num: int, sticky_num: int | None = None) -> str:
+        """슬롯 마크 우선순위: ⏳ 선택대기 > 🎯 고정타겟 > 📝 작업중 > ⭕ 연결 > ❌ 종료."""
         if self.pending_num == num:
             return "⏳"
+        if sticky_num == num:
+            return "🎯"
         if not info:
             return "❌"
         if info.status == "busy":
             return "📝"
         return "⭕"
 
-    def status_text(self) -> str:
+    def status_text(self, sticky_num: int | None = None) -> str:
         act = {i.number: i for i in self.reg.active()}
         parts = []
         for n in range(1, self.max_slots + 1):
             emoji = NUM_EMOJI.get(n, f"[{n}]")
-            parts.append(f"{emoji}.{self._mark_for(act.get(n), n)}")
+            parts.append(f"{emoji}.{self._mark_for(act.get(n), n, sticky_num)}")
         return "  ".join(parts)
 
     def keyboard_markup(self) -> dict:
@@ -84,28 +87,31 @@ class PinBoard:
             rows.append(row)
         return {"keyboard": rows, "resize_keyboard": True}
 
-    def create(self) -> None:
+    def create(self, sticky_num: int | None = None) -> None:
         """본문(상태, markup 없음→edit 가능) + 버튼(ReplyKeyboard) 메시지 생성."""
         if not self.chat:
             return
         # 1) 상태 본문 (markup 없음 → editMessageText 갱신 가능)
-        sid = self.tg.send(self.chat, self.status_text())
-        if sid:
+        sids = self.tg.send(self.chat, self.status_text(sticky_num))
+        if sids:
+            sid = sids[-1]
             self.status_id = sid
-            self._last_text = self.status_text()
+            self._last_text = self.status_text(sticky_num)
             self._save_id(self.status_id_file, sid)
             self.tg.pin_chat_message(self.chat, sid)
         # 2) 버튼 (ReplyKeyboard, 번호만 고정)
-        kid = self.tg.send(self.chat, "터미널 선택", reply_markup=self.keyboard_markup())
-        if kid:
+        kids = self.tg.send(self.chat, "터미널 선택", reply_markup=self.keyboard_markup())
+        if kids:
+            kid = kids[-1]
             self.keyboard_id = kid
             self._save_id(self.keyboard_id_file, kid)
 
-    def refresh_if_changed(self, pending_num: int | None = None) -> None:
+    def refresh_if_changed(self, pending_num: int | None = None,
+                           sticky_num: int | None = None) -> None:
         if not self.status_id:
             return
         self.pending_num = pending_num   # 선택대기 번호 반영(⏳)
-        text = self.status_text()
+        text = self.status_text(sticky_num)
         if text != self._last_text:
             # 본문만 editMessageText(markup 없음 → edit 가능). 활성 키보드는 유지.
             try:

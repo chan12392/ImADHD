@@ -52,15 +52,19 @@ class TelegramClient:
         return result
 
     def send(self, chat_id: str, text: str, reply_markup: dict | None = None,
-             parse_mode: str | None = None, disable_notification: bool = False) -> int | None:
-        """메시지 전송. 반환=마지막 청크의 message_id (pin 용). reply_markup=키보드.
-        parse_mode='Markdown'|'HTML'. disable_notification=True → 무음 전송.
+             parse_mode: str | None = None, disable_notification: bool = False) -> list[int]:
+        """메시지 전송. 반환=모든 청크의 message_id 리스트 (pin 용=ids[-1]).
+        reply_markup=키보드. parse_mode='Markdown'|'HTML'.
+        disable_notification=True → 무음 전송.
 
         4096자 텔레그램 한도 초과 시 여러 통으로 분할. 분할된 경우 태그가 중간에
         잘려 깨지는 것을 피하려 parse_mode 는 포기하고 plain 으로 보낸다
-        (포맷보다 전달 자체가 중요 — 2026-07-04 긴 회신이 통째로 유실된 사고 대응)."""
+        (포맷보다 전달 자체가 중요 — 2026-07-04 긴 회신이 통째로 유실된 사고 대응).
+
+        모든 청크 message_id 반환 — reply_hook 이 각 청크를 같은 슬롯에 매핑
+        (사용자가 첫 청크에 답장해도 라우팅 적중, 2026-07-06)."""
         if not chat_id:
-            return None
+            return []
         if len(text) <= MAX_TG_TEXT:
             data = {"chat_id": chat_id, "text": text,
                     "disable_notification": bool(disable_notification)}
@@ -69,18 +73,21 @@ class TelegramClient:
             if reply_markup:
                 data["reply_markup"] = reply_markup
             resp = self._api("sendMessage", data, timeout=10)
-            return resp.get("result", {}).get("message_id")
+            mid = resp.get("result", {}).get("message_id")
+            return [mid] if mid else []
 
         chunks = [text[i:i + MAX_TG_TEXT] for i in range(0, len(text), MAX_TG_TEXT)]
-        last_id = None
+        ids: list[int] = []
         for i, chunk in enumerate(chunks):
             data = {"chat_id": chat_id, "text": chunk,
                     "disable_notification": bool(disable_notification)}
             if reply_markup and i == len(chunks) - 1:
                 data["reply_markup"] = reply_markup
             resp = self._api("sendMessage", data, timeout=10)
-            last_id = resp.get("result", {}).get("message_id")
-        return last_id
+            mid = resp.get("result", {}).get("message_id")
+            if mid:
+                ids.append(mid)
+        return ids
 
     def edit_message_text(self, chat_id: str, message_id: int, text: str,
                           reply_markup: dict | None = None) -> None:

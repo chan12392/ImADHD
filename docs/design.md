@@ -528,3 +528,66 @@ ImADHD/                             # 레포 루트
 **검증**: node 직접 호출 → `[PM2] Restoring processes` 정상 + imadhd pid 유지(online, restarts 0). 재부팅 후 자동 부활 확보.
 
 **교훈**: Windows 로그온 자동시작(wscript/HKCU Run)은 사용자 셸 PATH를 상속하지 않을 수 있음 → node/python 등 인터프리터 호출은 **반드시 절대경로**. `pm2 resurrect`식 PATH 의존 명령은 로그온 컨텍스트에서 조용히 실패한다.
+
+---
+
+## 13. v0.3.0 기능 추가 (2026-07-06)
+
+public 전환 후 모바일 UX + 자가진단 3종.
+
+### 13.1 고정 타겟 — `/use <N>` / `/use off`
+
+**배경**: 현행 선택모드는 `PENDING_TTL=600` 일회성 pending. 여러 터미널을 오래 다루면 매번 버튼/번호/reply가 필요해 피로.
+
+**설계**:
+- `CommandContext`에 `sticky: dict[chat_id -> slot_num]` 추가(영구, TTL 無). 라우터 프로세스 메모리 + `data_dir/sticky.json` 영속(재시작 시 복원).
+- `/use 3` → `sticky[chat]=3`. `/use off` → `del sticky[chat]`.
+- 본문(번호접두 無) 라우팅 우선순위:
+  1. 명시 번호(`N️⃣`/`/N`) — 최우선.
+  2. `reply_to` 매핑 — 명시 답장.
+  3. **sticky** — 본문만 오면 sticky 타겟 주입(신규, pending보다 먼저).
+  4. pending(TTL 600) — legacy 1회성.
+  5. auto(활성 1개) — 폴백.
+- sticky 타겟이 죽으면 자동 해제(release 시 sticky도 제거).
+- **보드 표시**: sticky slot 상태라인 앞에 `🎯` 표시. `⭕🎯 3` 형태.
+
+**토글 의미 정리**: sticky는 "이 채팅의 기본 타겟". 명시 번호 쓰면 그쪽이 우선(일시적). 본문만 보내면 sticky로. `/use off`로 해제 전까지 유지.
+
+### 13.2 긴 답변 reply 라우팅 — 청크 전수 매핑
+
+**배경**: `client.send()`는 4000자 초과 시 청크 분할하지만 마지막 `message_id`만 반환. `reply_hook`도 마지막 청크만 reply_map 저장. 사용자가 첫 청크에 답장하면 라우팅 미스.
+
+**설계**:
+- `send()` 반환형 `int | None` → `list[int]` (모든 청크 id). 호출자는 `ids[-1] if ids else None`로 pin용 마지막 id 획득(기존 호출처 호환).
+- `reply_hook`: `for mid in sent_ids: store_reply_map(data_dir, mid, info.number)`. 모든 청크 → 동일 슬롯 매핑.
+- `pin_board`/다른 `send()` 호출처는 `sent_ids[-1]`만 쓰면 됨(마지막 id = pin 대상).
+
+**하위 호환**: 단일 전송은 길이 1 리스트. `None`은 빈 리스트와 동등 취급.
+
+### 13.3 `/doctor` 진단 명령
+
+**배경**: public repo 사용자가 "왜 안 되지?" 자가진단. install 지원 부담 ↓. design 12.x(부팅함정/stale slot) 이슈와 직결.
+
+**설계**: `commands/doctor_command.py`. 각 항목 ✅/⚠️/❌ + 한 줄 설명 → 텔레그램 전송.
+
+검사 항목:
+1. **router heartbeat** — `data_dir/heartbeat.txt` age < 30s (alive) / < 120s (지연) / 그외 (죽음/미기동).
+2. **registry 슬롯** — active 수 + 상태별(idle/busy/dead 카운트).
+3. **pin 메시지** — `data_dir/pin.json`(또는 board status_id) 존재 여부.
+4. **CC 훅 설치** — `~/.claude/settings.json`에 imadhd 4 훅(SessionStart/Stop/PreToolUse/UserPromptSubmit) 존재.
+5. **pm2 router** — `pm2 jlist`에 `imadhd` online. + 부팅 autostart(startup 등록 여부 — Windows: resurrect.cmd+schtasks, Linux: systemd).
+6. **bot command scope** — getMyCommands default + all_private_chats 양쪽에 ImADHD 명령 존재(메뉴 안 뜨면 scope 누락).
+
+출력 포맷(예시):
+```
+🔍 ImADHD doctor
+✅ router: alive (heartbeat 5s)
+✅ slots: 3 active (2 idle, 1 busy)
+✅ pin: 설정됨 (status=123, kb=124)
+⚠️ hooks: 3/4 (UserPromptSubmit 누락)
+✅ pm2: imadhd online
+❌ bot menu: all_private_chats scope 비어있음 — install 재실행 권장
+```
+
+**의존**: telegram client(token 필요) → doctor 명령은 router 컨텍스트에서 실행(이미 token 로드됨). 단독 CLI 모드도 옵션(`python -m imadhd.cli doctor`).
+

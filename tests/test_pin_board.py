@@ -14,7 +14,7 @@ class FakeTG:
         mid = self._next_mid
         self._next_mid += 1
         self.sent.append((chat_id, text, reply_markup))
-        return mid
+        return [mid]
     def edit_message_text(self, chat_id, message_id, text, reply_markup=None):
         self.edited.append((chat_id, message_id, text, reply_markup))
     def pin_chat_message(self, chat_id, message_id):
@@ -137,3 +137,31 @@ def test_refresh_repins_on_edit_failure(tmp_path):
     assert len(board.tg.sent) == sent_before + 2         # status + keyboard 재생성
     assert board.status_id != old_sid
     assert board.tg.pinned[-1] == board.status_id
+
+
+def test_sticky_num_shows_target_marker(tmp_path):
+    """sticky_num=N → 해당 슬롯 🎯 표시 (busy/idle 보다 우선)."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")   # 1번 idle
+    reg.set_status(2, "busy") if reg.claim_slot("s2", hwnd=2, pid=2, cwd="c", started_at="t") else None
+    text = board.status_text(sticky_num=1)
+    assert f"{NUM_EMOJI[1]}.🎯" in text
+
+
+def test_pending_overrides_sticky(tmp_path):
+    """같은 슬롯에 pending+sticky → ⏳ 우선(선택대기가 더 일시적)."""
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")
+    board.pending_num = 1
+    assert board._mark_for(reg.get(1), 1, sticky_num=1) == "⏳"
+
+
+def test_refresh_propagates_sticky(tmp_path):
+    board, reg = _board(tmp_path)
+    reg.claim_slot("s1", hwnd=1, pid=1, cwd="c", started_at="t")
+    board.create()
+    board.tg.edited.clear()
+    board.refresh_if_changed(sticky_num=1)               # 🎯
+    _c, _m, text, _mk = board.tg.edited[-1]
+    assert "🎯" in text
+

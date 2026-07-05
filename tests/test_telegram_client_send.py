@@ -2,6 +2,8 @@
 
 분할 없이 그대로 보내면 텔레그램이 400 Bad Request 로 통째로 거부하고,
 plain 폴백도 길이가 그대로라 재실패 → 회신이 유실된다(2026-07-04 발견).
+send() 는 모든 청크의 message_id 리스트를 반환 — reply_hook 이 각 청크를
+같은 슬롯에 매핑(2026-07-06).
 """
 from imadhd.telegram_api.client import TelegramClient, MAX_TG_TEXT
 
@@ -20,11 +22,11 @@ def _client(calls):
 def test_short_text_sends_single_call_with_parse_mode():
     calls = []
     tg = _client(calls)
-    msg_id = tg.send("1", "짧은 메시지", parse_mode="HTML")
+    ids = tg.send("1", "짧은 메시지", parse_mode="HTML")
     assert len(calls) == 1
     assert calls[0][1]["text"] == "짧은 메시지"
     assert calls[0][1]["parse_mode"] == "HTML"
-    assert msg_id == 1
+    assert ids == [1]
 
 
 def test_long_text_splits_into_multiple_calls_without_parse_mode():
@@ -50,9 +52,16 @@ def test_long_text_reply_markup_only_on_last_chunk():
     assert calls[1][1]["reply_markup"] == markup
 
 
-def test_send_returns_last_chunk_message_id():
+def test_send_returns_all_chunk_message_ids():
+    """긴 회신 = 모든 청크 id 리스트 반환 (reply_hook 전 청크 매핑용)."""
     calls = []
     tg = _client(calls)
-    long_text = "다" * (MAX_TG_TEXT + 1)
-    msg_id = tg.send("1", long_text)
-    assert msg_id == len(calls)
+    long_text = "다" * (MAX_TG_TEXT + 1)   # 2 청크
+    ids = tg.send("1", long_text)
+    assert ids == [1, 2]
+    assert len(calls) == 2
+
+
+def test_send_returns_empty_list_for_empty_chat():
+    ids = TelegramClient("t", "/tmp/x.txt", "1").send("", "x")
+    assert ids == []
