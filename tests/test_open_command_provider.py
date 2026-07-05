@@ -129,17 +129,25 @@ def _handle_and_capture(monkeypatch, text):
 
 def test_handle_model_arg_adds_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open opus")
-    assert captured["args"][-3:] == ["claude", "--model", "opus"]
+    # host.py 래핑(`py -m imadhd.host -- claude ...`)으로 Popen 마지막 인자는
+    # 한 개의 inner cmdline 문자열. 모델 인자가 그 안에 claude tail 로 들어감.
+    inner = captured["args"][-1]
+    assert inner.endswith("claude --model opus")
+    assert "imadhd.host" in inner
     assert "opus" in tg.sent[-1]
 
 
 def test_handle_bare_open_no_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open")
-    assert captured["args"][-1] == "claude"
-    assert "--model" not in captured["args"]
+    inner = captured["args"][-1]
+    assert inner.endswith("-- claude")
+    assert "imadhd.host" in inner
+    assert "--model" not in inner
 
 
 def test_handle_glm_arg_no_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open glm")
-    assert captured["args"][-1] == "claude"
+    inner = captured["args"][-1]
+    assert inner.endswith("-- claude")
+    assert "imadhd.host" in inner
     assert "GLM" in tg.sent[-1]
