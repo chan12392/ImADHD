@@ -12,6 +12,7 @@ registry.json
 offset.txt
 *.runtime.json
 data/
+_host_diag.log
 
 # ===== Python =====
 __pycache__/
