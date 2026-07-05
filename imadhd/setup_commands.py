@@ -17,6 +17,7 @@ def build_commands(max_slots: int = 6) -> list[dict]:
       `/open`   : 새 터미널 생성               (OpenCommand)
       `/close N`: N번 터미널 닫기              (CloseCommand)
       `/stop N` : N번 작업 중단(ESC)           (StopCommand)
+      `/use N`  : N번 고정(본문 자동 주입)      (UseCommand) · `/use off` 해제
       `/help`   : 명령 도움말                  (HelpCommand)
       `/pin`    : 상태 보드 핀 새로고침        (PinCommand)
     """
@@ -29,6 +30,8 @@ def build_commands(max_slots: int = 6) -> list[dict]:
     cmds.append({"command": "open", "description": "새 터미널 생성"})
     cmds.append({"command": "close", "description": "N번 터미널 닫기  예: /close 1"})
     cmds.append({"command": "stop", "description": "N번 작업 중단(ESC)  예: /stop 1"})
+    cmds.append({"command": "use", "description": "N번 터미널 고정(본문 자동 주입)  예: /use 3 · /use off"})
+    cmds.append({"command": "doctor", "description": "진단(라우터·훅·pm2·봇 메뉴)"})
     cmds.append({"command": "help", "description": "명령 도움말"})
     cmds.append({"command": "pin", "description": "상태 보드 핀 새로고침"})
     return cmds

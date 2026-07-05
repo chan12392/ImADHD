@@ -179,8 +179,8 @@ def main() -> int:
             lines.append(f"  {oi + 1}. {opt['label']}" + (f" — {d}" if d else ""))
         markup = {"inline_keyboard": ask_manager.build_inline_keyboard(it["options"], ask_id, i)}
         try:
-            mid = tg.send(chat_id, "\n".join(lines), reply_markup=markup)
-            it["message_id"] = mid
+            mids = tg.send(chat_id, "\n".join(lines), reply_markup=markup)
+            it["message_id"] = mids[-1] if mids else None
             sent += 1
         except Exception as e:
             _debug_log(f"[ask] send failed q{i}: {e!r}")

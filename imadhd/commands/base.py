@@ -25,6 +25,10 @@ class CommandContext:
     # 선택모드 대기 상태: chat_id -> (slot_num, timestamp).
     # 버튼 클릭 시 등록, 다음 본문 메시지 주입 시 소비.
     pending: dict = field(default_factory=dict)
+    # 고정 타겟(sticky) 상태: chat_id -> slot_num.
+    # /use N 으로 설정 → 이후 번호 없는 본문을 해당 슬롯으로 자동 주입.
+    # /use off 또는 슬롯 사망 시 해제. data_dir/sticky.json 영속.
+    sticky: dict = field(default_factory=dict)
 
 
 class Command(ABC):

@@ -52,6 +52,9 @@ def run(settings: "Settings") -> None:
     from ..commands.close_command import CloseCommand
     from ..commands.stop_command import StopCommand
     from ..commands.help_command import HelpCommand
+    from ..commands.use_command import UseCommand
+    from ..commands.doctor_command import DoctorCommand
+    from ..core import sticky as sticky_store
     from ..boards.pin_board import PinBoard
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -65,9 +68,14 @@ def run(settings: "Settings") -> None:
     commands = [
         PinCommand(board), ListCommand(), NewCommand(),
         OpenCommand(), CloseCommand(), StopCommand(),
-        HelpCommand(), InjectCommand(),
+        UseCommand(), DoctorCommand(), HelpCommand(), InjectCommand(),
     ]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
+    # 고정 타겟(sticky) 영속 파일 로드 — /use N 으로 설정한 chat→slot 복원.
+    try:
+        ctx.sticky = sticky_store.load(settings.data_dir)
+    except Exception as e:
+        log.warning("sticky load failed: %s", e)
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
 
@@ -153,6 +161,14 @@ def run(settings: "Settings") -> None:
         p = ctx.pending.get(str(settings.allowed_chat_id))
         return p[0] if p else None
 
+    def _sticky_num() -> int | None:
+        """현재 고정 타겟 번호(단일 채팅). None=고정 없음."""
+        s = ctx.sticky.get(str(settings.allowed_chat_id))
+        try:
+            return int(s) if s is not None else None
+        except (TypeError, ValueError):
+            return None
+
     log.info("router start: slots=%d data_dir=%s", settings.max_slots, settings.data_dir)
     try:
         board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
@@ -172,7 +188,17 @@ def run(settings: "Settings") -> None:
         # 종료 알림은 채팅이 지저분해져 생략(상태 보드/​핀 + /list 로 확인).
         try:
             reg.sweep_dead(alive_fn)
-            board.refresh_if_changed(pending_num=_pending_num())
+            # 고정 타겟(sticky) 중 사망한 슬롯 자동 해제.
+            alive_nums = {i.number for i in reg.active()}
+            dead = [c for c, n in ctx.sticky.items() if n not in alive_nums]
+            if dead:
+                for c in dead:
+                    ctx.sticky.pop(c, None)
+                try:
+                    sticky_store.save(settings.data_dir, ctx.sticky)
+                except Exception as e:
+                    log.warning("sticky save failed: %s", e)
+            board.refresh_if_changed(pending_num=_pending_num(), sticky_num=_sticky_num())
         except Exception as e:
             log.warning("sweep/board error: %s", e)
 
@@ -224,8 +250,28 @@ def run(settings: "Settings") -> None:
                             handled = True
                         except Exception as e:
                             log.exception("reply-to inject failed: %s", e)
+            # 고정 타겟(sticky): 번호 없고 슬래시 아닌 본문 → 고정 슬롯으로 주입.
+            # 우선순위: 명시번호(InjectCommand) > reply_to > sticky > pending > auto.
+            # 슬롯 사망 시 자동 해제(sweep 도 매 틱 정리하지만 즉시 반영).
+            if text and not handled and parse_leading_number(text) is None and not text.startswith("/"):
+                stick = ctx.sticky.get(str(chat))
+                if stick is not None:
+                    sinfo = reg.get(stick)
+                    if sinfo and transport.is_alive(sinfo.to_dict()):
+                        try:
+                            do_inject(ctx, stick, text, str(chat))
+                            board.refresh_if_changed(pending_num=_pending_num(), sticky_num=_sticky_num())
+                            handled = True
+                        except Exception as e:
+                            log.exception("sticky inject failed: %s", e)
+                    else:
+                        ctx.sticky.pop(str(chat), None)
+                        try:
+                            sticky_store.save(settings.data_dir, ctx.sticky)
+                        except Exception:
+                            pass
             # 선택모드 pending: 번호 없는 본문 → 대기 번호로 주입
-            if text and parse_leading_number(text) is None:
+            if text and not handled and parse_leading_number(text) is None:
                 pend = ctx.pending.get(str(chat))
                 if pend:
                     pnum, pts = pend
