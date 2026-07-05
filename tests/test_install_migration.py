@@ -67,3 +67,18 @@ def test_migration_preserves_non_token_env(tmp_path, monkeypatch):
     }
     out = _run_step3(tmp_path, monkeypatch, initial)
     assert out.get("env") == {"MY_THING": "x", "PATH_EXTRA": "y"}
+
+
+def test_backup_file_is_redacted(tmp_path, monkeypatch):
+    """백업 파일에 토큰 잔류 금지 — 마이그레이션(redaction) 후 백업."""
+    initial = {
+        "env": {"TELEGRAM_BOT_TOKEN": "123456:ABC-SECRET", "TELEGRAM_ALLOWED_CHAT_ID": "999"},
+        "hooks": {},
+    }
+    _run_step3(tmp_path, monkeypatch, initial)
+    baks = list((tmp_path / ".claude").glob("settings.json.bak-*"))
+    assert baks, "백업 파일 생성돼야 함"
+    bak_text = baks[0].read_text(encoding="utf-8")
+    assert "123456:ABC-SECRET" not in bak_text
+    assert "TELEGRAM_BOT_TOKEN" not in bak_text
+    assert "TELEGRAM_ALLOWED_CHAT_ID" not in bak_text
