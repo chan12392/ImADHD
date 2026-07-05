@@ -43,8 +43,13 @@ class Settings:
             # settings.json global env 대신: CC 세션/하위 프로세스에 토큰 확산 방지.
             user_env = _data_dir_default() / "env"
             if user_env.exists():
-                load_dotenv(user_env)
-            load_dotenv()  # cwd / .env
+                load_dotenv(user_env, override=True)
+            # override=True: ~/.imadhd/env 와 repo .env 가 ambient env 보다 우선.
+            # 2026-07-06 실사고: pm2 daemon/터미널 부모 체인에 IMADHD_TRANSPORT=
+            # sendkeys_win 이 세션 레벨로 깔려 있어 override=False(default)면
+            # .env 의 pipe_win 이 무시되고 sendkeys 로 회귀(포커스 강제 주입).
+            # 설계 의도(ambient 확산 방지, 위 주석)에 맞게 .env 를 권위로.
+            load_dotenv(override=True)  # cwd / .env
 
         dd = os.environ.get("IMADHD_DATA_DIR", "").strip()
         data_dir = Path(dd) if dd else _data_dir_default()
