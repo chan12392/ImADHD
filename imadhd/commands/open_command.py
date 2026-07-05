@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 
 from .base import Command, Message, CommandContext
 
@@ -38,6 +39,30 @@ _ANTHROPIC_PROXY_ENV_KEYS = (
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
 )
 _GLM_ALIASES = ("glm", "z.ai", "zai")
+
+_DEFAULT_LINUX_LAUNCH = (
+    "bash -lc 'export PATH=$HOME/.local/bin:$HOME/.bun/bin:$PATH; "
+    "source $HOME/.anthropic.env 2>/dev/null || true; "
+    "{exports}"
+    "cd /home/user && exec claude --dangerously-skip-permissions{model_flag}'"
+)
+
+
+def build_linux_launch_cmd(base_env: dict, use_glm: bool, model: str | None) -> str:
+    """Linux(tmux) 새 세션용 claude 실행 커맨드 문자열 조립.
+
+    build_open_env() 와 동일한 z.ai 프록시 env 정책을 bash 커맨드 안의
+    export 문으로 반영한다(Windows 는 subprocess env= 로 넘기지만, tmux
+    new-session 은 프로세스 env 를 그대로 물려주므로 셸 안에서 명시 export
+    해야 launch 시점 env 오염과 무관하게 의도한 provider 로 뜬다)."""
+    exports = ""
+    if use_glm:
+        for k in _ANTHROPIC_PROXY_ENV_KEYS:
+            v = base_env.get(k)
+            if v:
+                exports += f"export {k}={v!r}; "
+    model_flag = f" --model {model}" if model else ""
+    return _DEFAULT_LINUX_LAUNCH.format(exports=exports, model_flag=model_flag)
 
 
 def _wt_path() -> str:
@@ -100,8 +125,6 @@ class OpenCommand(Command):
         arg = parts[1].strip() if len(parts) == 2 else ""
         use_glm, model = parse_open_arg(arg)
 
-        env = build_open_env(os.environ, use_glm)
-        claude_cmd = ["claude"] if not model else ["claude", "--model", model]
         if use_glm:
             label = "GLM(z.ai)"
         elif model:
@@ -109,16 +132,32 @@ class OpenCommand(Command):
         else:
             label = "Anthropic 공식"
 
+        if os.name == "nt":
+            env = build_open_env(os.environ, use_glm)
+            claude_cmd = ["claude"] if not model else ["claude", "--model", model]
+            try:
+                subprocess.Popen(
+                    [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
+                     "cmd.exe", "/c"] + claude_cmd,
+                    creationflags=_DETACHED | _NEW_PROC_GROUP,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    env=env,
+                )
+            except Exception as e:
+                ctx.telegram.send(msg.chat_id, f"❌ 터미널 생성 실패: {e}")
+                return
+            ctx.telegram.send(msg.chat_id, f"🆕 새 터미널 생성 중({label})… (수 초 내 번호 할당)")
+            return
+
+        session_name = f"claude-{int(time.time())}"
+        launch_cmd = build_linux_launch_cmd(os.environ, use_glm, model)
         try:
-            subprocess.Popen(
-                [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
-                 "cmd.exe", "/c"] + claude_cmd,
-                creationflags=_DETACHED | _NEW_PROC_GROUP,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                close_fds=True,
-                env=env,
-            )
+            subprocess.run(["tmux", "new-session", "-d", "-s", session_name, launch_cmd],
+                            timeout=10)
         except Exception as e:
             ctx.telegram.send(msg.chat_id, f"❌ 터미널 생성 실패: {e}")
             return
-        ctx.telegram.send(msg.chat_id, f"🆕 새 터미널 생성 중({label})… (수 초 내 번호 할당)")
+        ctx.telegram.send(
+            msg.chat_id, f"🆕 새 터미널 생성 중({label}, tmux:{session_name})… (수 초 내 번호 할당)"
+        )
