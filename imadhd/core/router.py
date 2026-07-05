@@ -223,6 +223,17 @@ def run(settings: "Settings") -> None:
                             log.exception("pending inject failed: %s", e)
                     else:
                         del ctx.pending[str(chat)]  # 만료 → 일반 메시지로
+                elif not text.startswith("/"):
+                    # 자동 타겟: 활성 터미널 1개면 /N·버튼·pending 없이 본문 즉시 주입.
+                    # 2개+ → 현행 유지(번호 명령으로 명시 선택). 슬래시명령(/list 등)은 제외.
+                    actives = reg.active()
+                    if len(actives) == 1:
+                        try:
+                            do_inject(ctx, actives[0].number, text, str(chat))
+                            board.refresh_if_changed(pending_num=None)
+                            handled = True
+                        except Exception as e:
+                            log.exception("auto-target inject failed: %s", e)
             if not handled:
                 for cmd in commands:
                     try:
