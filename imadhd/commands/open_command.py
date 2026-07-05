@@ -1,6 +1,9 @@
 """/open 명령: 클로드 터미널 1개 새로 생성 (WT 신규 창 + claude).
 
-`wt -w new new-tab --title Claude cmd /c claude` 를 detached 로 spawn.
+`wt -w new new-tab --title Claude cmd /c "cd <repo> && py -m imadhd.host -- claude"`
+를 detached 로 spawn. host.py 가 ConPTY 위에서 claude 를 spawn 하고
+세션별 named-pipe 서버(\\.\pipe\imadhd-slot-<N>)를 띄운다 → 라우터가
+포커스 강제 전환 없이 텔레그램 입력을 주입할 수 있다.
 SessionStart 훅(btg-register)이 새 CC 세션을 잡아 자동 번호 할당 →
 "✅ N번 연결됨" 알림이 이어서 옴(무음).
 
@@ -24,9 +27,15 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 from .base import Command, Message, CommandContext
+
+# imadhd 패키지 루트(repo). host.py 를 `-m imadhd.host` 로 실행하려면
+# cwd 가 repo 여야(또는 패키지가 설치돼야) 모듈 해석이 된다.
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
 
 _DETACHED = 0x08
 _NEW_PROC_GROUP = 0x200
@@ -148,10 +157,19 @@ class OpenCommand(Command):
         if os.name == "nt":
             env = build_open_env(os.environ, use_glm)
             claude_cmd = ["claude"] if not model else ["claude", "--model", model]
+            # host.py(ConPTY + named-pipe 서버) 로 claude 를 래핑해 띄운다.
+            # 기존엔 cmd /c claude 로 래핑 없이 열어 파이프 서버가 안 떠 →
+            # 텔레그램 주입이 포커스 강제 전환 없이 안 됐다(2026-07-06).
+            py = sys.executable or "python.exe"
+            inner = (
+                f'cd /d "{_REPO_ROOT}" '
+                f'&& "{py}" -X utf8 -m imadhd.host -- '
+                + subprocess.list2cmdline(claude_cmd)
+            )
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
-                     "cmd.exe", "/c"] + claude_cmd,
+                     "cmd.exe", "/c", inner],
                     creationflags=_DETACHED | _NEW_PROC_GROUP,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     close_fds=True,
