@@ -14,6 +14,9 @@ def make_transport(name: str) -> Transport:
     if name == "tmux_linux":
         from .tmux_linux import TmuxLinuxTransport
         return TmuxLinuxTransport()
+    if name == "pipe_win":
+        from .pipe_win import PipeWinTransport
+        return PipeWinTransport()
     raise ValueError(f"unknown transport: {name!r} (settings.transport / IMADHD_TRANSPORT)")
 
 

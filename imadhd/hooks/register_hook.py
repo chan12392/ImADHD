@@ -189,7 +189,18 @@ def main() -> int:
         and existing.pid == pid
     )
 
-    num = reg.claim_slot(session_id, hwnd, pid, cwd, started, tmux_pane=tmux_pane)
+    # host PTY-bridge 가 IMADHD_WANT_SLOT=N 으로 미리 파이프를 열어둔 경우:
+    # 그 N이 비어 있으면 강제로 claim (host-자식 slot 정렬). 이미 점유/불가면 폴백.
+    want_slot_raw = os.environ.get("IMADHD_WANT_SLOT", "").strip()
+    want_slot: int | None = None
+    if want_slot_raw:
+        try:
+            want_slot = int(want_slot_raw)
+        except ValueError:
+            want_slot = None
+
+    num = reg.claim_slot(session_id, hwnd, pid, cwd, started,
+                         tmux_pane=tmux_pane, force_slot=want_slot)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
 
     # 연결 성공 알림은 채팅이 지저분해져 생략(/list 로 언제든 확인 가능).
