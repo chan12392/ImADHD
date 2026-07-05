@@ -1,61 +1,49 @@
-"""marker_capture 회신 전략 테스트. 마커 기반 본문 추출 + 말단 매칭(false trigger 방지)."""
+"""MarkerCapture 회신 전략 테스트.
+
+새 로직(2026-07-06): 마커 의존 제거. 회신 여부 = assistant 답 있음 여부,
+본문 = 답 전체. (회신 여부/길이 교정은 reply_hook이 pending 플래그+길이
+게이트로 담당 — 여기선 캡처 전략만 검증.)
+"""
 from imadhd.reply.marker_capture import MarkerCapture
 from imadhd.reply.base import ReplyPayload
-
-MARKER = "[A.D.H.D]"
 
 
 def _payload(text: str) -> ReplyPayload:
     return ReplyPayload(session_id="s", transcript_path="t", assistant_text=text)
 
 
-def test_marker_absent_no_reply():
-    mc = MarkerCapture(MARKER)
-    assert mc.should_reply(_payload("그냥 답변입니다")) is False
+def test_empty_text_no_reply():
+    assert MarkerCapture("[A.D.H.D]").should_reply(_payload("")) is False
+    assert MarkerCapture("[A.D.H.D]").should_reply(_payload("   ")) is False
 
 
-def test_single_line_body_before_marker():
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"지금 오후 12시 39분입니다. {MARKER}")
-    assert mc.should_reply(rp) is True
-    assert mc.build_text(rp) == "지금 오후 12시 39분입니다."
+def test_nonempty_text_replies():
+    mc = MarkerCapture("[A.D.H.D]")
+    assert mc.should_reply(_payload("답변입니다")) is True
 
 
-def test_multiline_body_marker_on_last_line():
-    mc = MarkerCapture(MARKER)
-    text = f"첫 줄 요약.\n둘째 줄 상세.\n셋째 줄 결론.\n{MARKER}"
-    rp = _payload(text)
-    assert mc.build_text(rp) == "첫 줄 요약.\n둘째 줄 상세.\n셋째 줄 결론."
+def test_build_text_returns_full_body():
+    """본문 = assistant_text 전체(마커 잘라내기 없음). CC가 마커를 안 뱉으니
+    회신에 표식이 섞이지 않는다."""
+    mc = MarkerCapture("[A.D.H.D]")
+    rp = _payload("첫 줄.\n둘째 줄.\n결론.")
+    assert mc.build_text(rp) == "첫 줄.\n둘째 줄.\n결론."
 
 
-def test_marker_mid_line_drops_rest():
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"답변 본문. {MARKER} 이건 잘려야 함")
-    assert mc.build_text(rp) == "답변 본문."
+def test_marker_in_body_is_kept_verbatim():
+    """마커가 본문에 포함돼도 잘라내지 않고 그대로(레거시 호환 — 구버전 CC가
+    마커를 뱉은 경우도 회신은 정상)."""
+    mc = MarkerCapture("[A.D.H.D]")
+    rp = _payload("답 [A.D.H.D]")
+    assert mc.build_text(rp) == "답 [A.D.H.D]"
 
 
-def test_marker_only_line_yields_prior_body():
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"본문입니다.\n{MARKER}")
-    assert mc.build_text(rp) == "본문입니다."
+def test_marker_arg_ignored():
+    """marker 인자는 레거시 호환용. should_reply/build_text 에 영향 없음."""
+    assert MarkerCapture("").should_reply(_payload("답")) is True
+    assert MarkerCapture("").build_text(_payload("답")) == "답"
 
 
-def test_empty_body_before_marker_returns_empty():
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"{MARKER}")
-    assert mc.build_text(rp) == ""
-
-
-def test_marker_not_on_last_line_no_reply():
-    """마커가 마지막 non-empty 줄 아니면 회신 X (입력 마커 echo false trigger 방지)."""
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"{MARKER}\n그런데 이어서 답을 달았다")  # 마커 첫 줄, 마지막엔 없음
-    assert mc.should_reply(rp) is False
-
-
-def test_trailing_blank_after_marker_still_replies():
-    """마커 뒤 빈 줄만 있으면 마커 줄이 마지막 non-empty → 회신."""
-    mc = MarkerCapture(MARKER)
-    rp = _payload(f"본문.\n{MARKER}\n  \n")
-    assert mc.should_reply(rp) is True
-    assert mc.build_text(rp) == "본문."
+def test_build_text_strips_whitespace():
+    mc = MarkerCapture("[A.D.H.D]")
+    assert mc.build_text(_payload("  답  \n")) == "답"

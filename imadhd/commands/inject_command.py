@@ -34,11 +34,12 @@ def _debug_log(line: str) -> None:
 
 
 def mark_marker_pending(data_dir, session_id: str) -> None:
-    """주입 = 항상 [A.D.H.D] 마커 턴. reply_hook 이 Stop 시점에 transcript 를
-    다시 읽어 "마커 턴인지" 재판정하면 cold-start 로 transcript flush 가
-    늦을 때(2026-07-05 실사고: session=0d38e2b2, exists=False 로 빠져
-    "마커 턴 아님" 오판 → 회신 유실) 놓친다. 주입 시점에 파일로 미리
-    남겨 transcript 상태와 무관하게 판정 가능하게 한다."""
+    """주입 = 항상 회신 대상 턴. reply_hook 이 Stop 시점에 transcript 로만
+    "이 턴이 텔레그램 인입이었는지" 재판정하면 cold-start flush 지연
+    (2026-07-05 실사고: session=0d38e2b2, exists=False 오판 → 회신 유실)에
+    놓친다. 주입 시점에 파일로 미리 남겨 transcript 상태와 무관하게 판정.
+    이름은 레거시(mark_marker_pending)지만 이제 마커 문자열과 무관 —
+    '회신 대상 턴' 플래그."""
     if not session_id or not data_dir:
         return
     try:
@@ -133,9 +134,9 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]}")
     # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
     body = _normalize_question(" ".join(body.split()) or "(빈 입력)")
-    # 마커는 CLAUDE.md 규칙 트리거([A.D.H.D])만.
-    # CC 규칙이 자동으로 "1~2문장 짧게 답 + 마지막 줄에 [A.D.H.D] 출력" 수행.
-    inject_text = f"{body} [A.D.H.D]"
+    # CC 프롬프트에 마커/표식 안 붙임 — CC는 텔레그램 인입 사실을 모름.
+    # 회신 결정·길이 교정은 전부 reply_hook(Stop)이 pending 플래그로 처리.
+    inject_text = body
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
     mark_marker_pending(ctx.settings.data_dir, info.session_id)
     result = ctx.transport.inject(info.to_dict(), inject_text)

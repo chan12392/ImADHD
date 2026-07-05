@@ -28,6 +28,12 @@ TRANSCRIPT_RETRY_INTERVAL_SEC = 0.2
 # 잔재로 간주하고 무시+삭제(무한 누적 방지).
 MARKER_PENDING_TTL_SEC = 3600.0
 
+# 텔레그램 회신 길이 게이트(대표님 mem0 선호: 700자 이하 권장, 1200자 최대).
+# HARD 초과 + 회신대상턴 + 재시도 아님 → 1회 block("짧게 다시").
+# stop_hook_active(재시도)면 포기하고 전체 전송(길어도 청크분할로 감당).
+REPLY_SOFT_LIMIT = 700
+REPLY_HARD_LIMIT = 1200
+
 
 def _get_role(entry: dict) -> str | None:
     msg = entry.get("message") if isinstance(entry, dict) else None
@@ -100,12 +106,9 @@ def last_nonempty_line(text: str) -> str:
     return ""
 
 
-def marker_missing(user_text: str, assistant_text: str, marker: str) -> bool:
-    """마지막 user 발화에 마커가 있는데(=마커 인입 turn) 마지막 assistant
-    응답의 마지막 줄에 마커가 없으면 True(=차단 대상)."""
-    if marker not in user_text:
-        return False  # 마커 인입 turn 아님 — 일반 터미널 작업, 강제 X
-    return marker not in last_nonempty_line(assistant_text)
+def reply_too_long(text: str, limit: int = REPLY_HARD_LIMIT) -> bool:
+    """회신 본문이 limit 자 초과면 True(=짧게 다시 block 대상)."""
+    return len(text or "") > limit
 
 
 def _marker_pending_path(data_dir, session_id: str) -> Path:
@@ -252,47 +255,42 @@ def main() -> int:
     else:
         _debug_log(f"[reply] no registry match session={session_id[:8]}")
 
-    should = mc.should_reply(rp)
+    # 회신 대상 턴 = 텔레그램 inject 로 시작(inject가 pending 세팅). 레거시
+    # user_text 마커(구버전 inject가 붙이던 [A.D.H.D])도 보조 신호로 인정.
+    # 마커 echo 여부는 회신 조건에서 완전 제거 — CC가 터미널 직접 타이핑에
+    # 마커를 과잉 출력해도(2026-07-06 session=c4f60955 실측) 텔레그램로 새어
+    # 나가지 않는다. CC는 텔레그램 인입 사실을 모른다(프롬프트에 표식 無).
+    entries = _read_entries(transcript_path)
+    user_text = last_user_text_from_entries(entries)
+    pending_flag = has_marker_pending(s.data_dir, session_id)
+    is_marker_turn = (s.reply_marker in user_text) or pending_flag
+    too_long = reply_too_long(text)
     _debug_log(
         f"[reply] session={session_id[:8]} text_len={len(text)} "
-        f"last_line={last_nonempty_line(text)!r} should_reply={should}"
+        f"too_long={too_long} is_marker_turn={is_marker_turn} "
+        f"pending={pending_flag} stop_hook_active={stop_hook_active}"
     )
-    # 회신(텔레그램 전송)은 마커 있을 때만. idle 복귀는 위에서 마커 무관 처리.
-    if not should:
-        if not text:
-            _debug_log(
-                f"[reply] no assistant text after retry session={session_id[:8]} "
-                f"transcript={transcript_path} exists={Path(transcript_path).exists()}"
-            )
-        pending_flag = has_marker_pending(s.data_dir, session_id)
-        if stop_hook_active:
-            # block 재요청 후 재시도 턴인데도 여전히 마커 없음 — 무한루프
-            # 방지 위해 더 이상 block 하지 않고 조용히 포기(회신 유실은
-            # 감수해도 hang 보다 낫다).
-            _debug_log(
-                f"[reply] stop_hook_active=True, still no marker, giving up "
-                f"session={session_id[:8]} pending_flag={pending_flag}"
-            )
-            clear_marker_pending(s.data_dir, session_id)
-            return 0
-        entries = _read_entries(transcript_path)
-        user_text = last_user_text_from_entries(entries)
-        # transcript 로 못 읽어도(cold-start flush 지연) inject 시점 플래그로
-        # "마커 턴"을 판정 — user_text="" 오판으로 회신이 조용히 유실되던
-        # 버그(2026-07-05, session=0d38e2b2) 재발 방지.
-        if marker_missing(user_text, text, s.reply_marker) or pending_flag:
-            reason = (
-                f"[imadhd] {s.reply_marker} 인입 turn인데 응답 마지막 줄에 "
-                f"{s.reply_marker} 없음 → 텔레그램 회신 안 감. "
-                f"응답 마지막 줄에 {s.reply_marker} 다시 출력."
-            )
-            _debug_log(
-                f"[reply] blocking to re-request marker session={session_id[:8]} "
-                f"pending_flag={pending_flag}"
-            )
-            sys.stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n")
-        else:
-            _debug_log(f"[reply] no reply, no block (not a marker turn) session={session_id[:8]}")
+    # 직접 타이핑 턴 — 회신도 block 도 안 함(idle 복귀는 위에서 마커 무관 처리).
+    if not is_marker_turn:
+        _debug_log(f"[reply] direct-typing turn, suppress reply+block session={session_id[:8]}")
+        return 0
+    if not text:
+        _debug_log(f"[reply] marker turn but no assistant text session={session_id[:8]}")
+        clear_marker_pending(s.data_dir, session_id)
+        return 0
+    # 길이 게이트: HARD 초과 + 재시도 아님 → 1회 "짧게 다시" block.
+    # stop_hook_active(재시도 턴)면 포기하고 전체 전송 — 길어도 청크분할로 감당.
+    # 마커 self-heal 과 동일 루프 가드(재시도에선 더 안 막음).
+    if too_long and not stop_hook_active:
+        reason = (
+            f"[imadhd] 답이 너무 김(>{REPLY_HARD_LIMIT}자). "
+            f"텔레그램은 결론 먼저 {REPLY_SOFT_LIMIT}자 이하로 다시."
+        )
+        _debug_log(
+            f"[reply] blocking to re-request short reply session={session_id[:8]} "
+            f"len={len(text)}"
+        )
+        sys.stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n")
         return 0
     clear_marker_pending(s.data_dir, session_id)
     body = mc.build_text(rp)
