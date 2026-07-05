@@ -7,16 +7,43 @@ from __future__ import annotations
 
 import contextlib
 import json
-import msvcrt
 import os
 import tempfile
 import time
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from .numberalloc import lowest_free
+
+
+def _try_lock(f) -> bool:
+    """비차단 배타락 시도. 성공 True."""
+    if os.name == "nt":
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _unlock(f) -> None:
+    if os.name == "nt":
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass
@@ -90,20 +117,17 @@ class JSONFileRegistry(Registry):
         try:
             deadline = time.monotonic() + timeout
             while True:
-                try:
-                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                if _try_lock(f):
                     locked = True
                     break
-                except OSError:
-                    if time.monotonic() > deadline:
-                        break
-                    time.sleep(0.05)
+                if time.monotonic() > deadline:
+                    break
+                time.sleep(0.05)
             yield
         finally:
             if locked:
                 try:
-                    f.seek(0)
-                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    _unlock(f)
                 except OSError:
                     pass
             f.close()

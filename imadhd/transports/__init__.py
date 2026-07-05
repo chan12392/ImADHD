@@ -11,6 +11,9 @@ def make_transport(name: str) -> Transport:
     if name == "sendkeys_win":
         from .sendkeys_win import SendKeysWinTransport
         return SendKeysWinTransport()
+    if name == "tmux_linux":
+        from .tmux_linux import TmuxLinuxTransport
+        return TmuxLinuxTransport()
     raise ValueError(f"unknown transport: {name!r} (settings.transport / IMADHD_TRANSPORT)")
 
 

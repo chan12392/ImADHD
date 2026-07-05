@@ -11,15 +11,20 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 from ctypes import wintypes
 
 from .base import Command, Message, CommandContext
 
 WM_CLOSE = 0x0010
-_user32 = ctypes.windll.user32
-_user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-_user32.PostMessageW.restype = wintypes.BOOL
+# 비Windows(오라클 tmux 등)에서 top-level import 만으로 죽지 않도록 격리.
+# hwnd 는 그 플랫폼에서 항상 0 이라 handle() 의 `if info.hwnd:` 가 실사용을 막는다.
+_user32 = None
+if os.name == "nt":
+    _user32 = ctypes.windll.user32
+    _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.PostMessageW.restype = wintypes.BOOL
 
 
 class CloseCommand(Command):
