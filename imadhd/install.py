@@ -67,13 +67,16 @@ def _restrict_perms(path: Path) -> None:
 
 
 def _write_secret(path: Path, content: str) -> None:
-    """0600 파일 생성(POSIX umask TOCTOU 방지).
+    """0600 파일 갱신(POSIX umask/loose-perm TOCTOU 방지).
 
-    write_text() 후 chmod 600 을 하면 POSIX umask 가 느슨한 환경에선 아주 짧게
-    0644 로 생성되는 창이 생긴다. os.open(..., 0o600) 은 fd 생성 단계부터
-    모드를 고정해 이 창을 없앤다. Windows os.open 은 mode 를 무시하므로
-    write_text 동등 + chmod 재확인(no-op 이중방어).
+    두 가지 창을 막는다:
+    1. 신규 생성 — os.open(..., 0o600) 이 fd 생성 단계부터 모드 고정.
+    2. 기존 파일이 0644 였던 경우 — O_CREAT|O_TRUNC 는 mode 인자를 무시하고
+       기존 모드를 유지하므로, fdopen/write 전 os.fchmod(fd, 0o600) 로 먼저 조인다.
+       그래야 write 한 비밀이 0644 로 디스크에 내려앉는 창이 없다.
+    Windows os.open 은 mode 를 무시 → write_text 동등 + chmod no-op 이중방어.
     """
+    path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     try:
         fd = os.open(path, flags, 0o600)
@@ -81,8 +84,16 @@ def _write_secret(path: Path, content: str) -> None:
         path.write_text(content, encoding="utf-8")
         _restrict_perms(path)
         return
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(content)
+    try:
+        if os.name != "nt":
+            try:
+                os.fchmod(fd, 0o600)  # 기존 loose-perm → write 전 조임
+            except OSError:
+                pass
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError:
+        path.write_text(content, encoding="utf-8")
     _restrict_perms(path)
 
 
@@ -372,15 +383,37 @@ def _hook_command(module: str) -> str:
     return f'"{PYTHON}" -X utf8 -m {module}'
 
 
+def _scrub_token_lines(text: str) -> str:
+    """raw 텍스트에서 TELEGRAM 시크릿 값 마스킹 (malformed JSON/BOM 대비).
+
+    정상 JSON redaction 은 메모리(dict) 단에서 처리하지만, settings.json 이
+    parse 실패(BOM·깨짐)하면 raw 파일을 그대로 .bad-* 로 옮기는 경로에 토큰이
+    남는다. 여기선 라인/문자열 단위 regex 로 값만 <redacted> 치환.
+    JSON("k": "v") · dotenv(k=v) 양쪽 폼 커버.
+    """
+    import re
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID"):
+        text = re.sub(
+            rf'(["\']?{key}["\']?\s*[:=]\s*)["\'][^"\']*["\']',
+            r'\1"<redacted>"',
+            text,
+        )
+    return text
+
+
 def _load_settings() -> dict:
     CLAUDE_DIR.mkdir(parents=True, exist_ok=True)
     if SETTINGS_FILE.exists():
         try:
             return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         except Exception as e:
-            _warn(f"settings.json 파싱 실패 ({e}) — 백업 후 새 구조")
+            # parse 실패(BOM·깨짐): 원본을 그대로 옮기면 .bad-* 에 토큰이 남는다.
+            # raw 텍스트에서 시크릿 값 마스킹 → 0600 .bad-* 로 저장 + 원본 삭제.
+            _warn(f"settings.json 파싱 실패 ({e}) — 시크릿 마스킹 후 백업")
+            raw = SETTINGS_FILE.read_text(encoding="utf-8", errors="replace")
             backup = SETTINGS_FILE.with_suffix(f".json.bad-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-            SETTINGS_FILE.rename(backup)
+            _write_secret(backup, _scrub_token_lines(raw))
+            SETTINGS_FILE.unlink()
     return {}
 
 
