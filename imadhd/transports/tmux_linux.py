@@ -23,6 +23,14 @@ from .base import InjectResult, Transport
 
 TMUX_TARGET = os.environ.get("IMADHD_TMUX_TARGET", "claude")
 
+
+def _resolve_target(target: dict | None) -> str:
+    """registry SessionInfo.to_dict() 에서 세션별 tmux_pane 우선 사용.
+    없으면(구버전 슬롯/폴백 세션) 기존 고정 타겟으로 하위호환."""
+    pane = (target or {}).get("tmux_pane") or ""
+    return pane or TMUX_TARGET
+
+
 # inject()가 idle-wait(최대 45s)+paste+Enter 를 라우터 메인루프에서 동기로
 # 돌리면 그 동안 텔레그램 getUpdates 폴링 자체가 멈춰 다음 메시지를 못 읽고
 # board(busy표시) 갱신도 밀린다(2026-07-05 실사고: "ping 보내고 답 없어서
@@ -149,19 +157,19 @@ def _inject_worker(tmux_target: str, text: str) -> None:
 
 class TmuxLinuxTransport(Transport):
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
-        tmux_target = TMUX_TARGET
-        # 라우터 메인루프(get_updates 폴링)를 안 막게 백그라운드 스레드로 위임.
-        # 성공/실패는 여기서 확인 못 함(비동기) — 실패 시 Linux 배포 응답이 없는
-        # 것으로 드러나며, register/reply 훅의 sweep_dead·marker 재요청이
-        # 안전망 역할을 한다.
+        tmux_target = _resolve_target(target)
+        st = _wait_idle(tmux_target, timeout=45.0)
+        if st == "dead":
+            return InjectResult(delivered=False, method="tmux-paste", note="tmux session dead")
         threading.Thread(target=_inject_worker, args=(tmux_target, text), daemon=True).start()
         return InjectResult(delivered=True, method="tmux-paste-async", note="비동기 처리중")
 
     def is_alive(self, target: dict) -> bool:
-        if not _has_session(TMUX_TARGET):
+        tmux_target = _resolve_target(target)
+        if not _has_session(tmux_target):
             return False
         r = subprocess.run(
-            ["tmux", "list-panes", "-t", TMUX_TARGET, "-F", "#{pane_current_command}"],
+            ["tmux", "list-panes", "-t", tmux_target, "-F", "#{pane_current_command}"],
             capture_output=True, text=True, timeout=_TMUX_CMD_TIMEOUT,
         )
         return r.returncode == 0 and "claude" in (r.stdout or "")
