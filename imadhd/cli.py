@@ -55,6 +55,16 @@ def install_main() -> int:
     return install_main(sys.argv[2:])   # argv[1]="install" 제거
 
 
+def uninstall_main() -> int:
+    """원라인 깔끔 제거 (install 역순: pm2·봇메뉴·훅·핀·data_dir·.env).
+
+      python -m imadhd uninstall          # 확인 프롬프트
+      python -m imadhd uninstall --yes    # 비대화형
+    """
+    from .uninstall import main as _uninstall
+    return _uninstall(sys.argv[2:])      # argv[1]="uninstall" 제거
+
+
 def adhd_main() -> int:
     """봇 명령 메뉴 등록(setMyCommands).
 
@@ -97,5 +107,5 @@ def adhd_main() -> int:
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "router"
     sys.exit({"router": router_main, "register": register_main, "reply": reply_main,
-              "adhd": adhd_main, "install": install_main,
+              "adhd": adhd_main, "install": install_main, "uninstall": uninstall_main,
               "watchdog": watchdog_main}.get(cmd, router_main)())
