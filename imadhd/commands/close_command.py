@@ -45,21 +45,35 @@ class CloseCommand(Command):
             ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
             return
 
-        # 1) WM_CLOSE (WT 창 graceful)
-        if info.hwnd:
-            try:
-                _user32.PostMessageW(int(info.hwnd), WM_CLOSE, 0, 0)
-            except Exception:
-                pass
-        # 2) taskkill cc_pid 트리 (보측 — claude 강제 종료 → cmd/WT 연쇄 종료)
-        if info.pid:
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(info.pid), "/T"],
-                    capture_output=True, timeout=5,
-                )
-            except Exception:
-                pass
+        if os.name == "nt":
+            # 1) WM_CLOSE (WT 창 graceful)
+            if info.hwnd:
+                try:
+                    _user32.PostMessageW(int(info.hwnd), WM_CLOSE, 0, 0)
+                except Exception:
+                    pass
+            # 2) taskkill cc_pid 트리 (보측 — claude 강제 종료 → cmd/WT 연쇄 종료)
+            if info.pid:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(info.pid), "/T"],
+                        capture_output=True, timeout=5,
+                    )
+                except Exception:
+                    pass
+        else:
+            pane = getattr(info, "tmux_pane", "")
+            if pane:
+                try:
+                    r = subprocess.run(
+                        ["tmux", "display-message", "-p", "-t", pane, "#S"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    session_name = (r.stdout or "").strip()
+                    if session_name:
+                        subprocess.run(["tmux", "kill-session", "-t", session_name], timeout=5)
+                except Exception:
+                    pass
 
         ctx.registry.release(num)
         ctx.telegram.send(msg.chat_id, f"🚪 {num}번 터미널 닫음")
