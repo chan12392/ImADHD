@@ -12,8 +12,9 @@
   python -m imadhd install --skip-pm2           # pm2 단계 건너뛰기 (이미 세팅됨)
 
 토큰 소스 우선순위: --token 인자 > 환경변수 > 기존 .env > 인터랙티브 프롬프트.
-토큰/채팅 은 repo/.env (router용, pm2 cwd=repo) + ~/.claude/settings.json env (CC 훅용)
-양쪽에 주입 → config.py 수정 불필요.
+토큰/채팅 은 repo/.env (router용, pm2 cwd=repo) + ~/.imadhd/env (CC 훅용, 0600)
+양쪽에 주입. settings.json global env 는 쓰지 않음 → CC 세션/하위 프로세스 토큰
+확산 차단. step3_hooks() 는 기존 설치가 global env 에 남긴 토큰을 제거(마이그레이션).
 """
 from __future__ import annotations
 
@@ -379,9 +380,21 @@ def step3_hooks(token: str, chat: str) -> None:
         bak = SETTINGS_FILE.with_suffix(f".json.bak-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
         shutil.copy2(SETTINGS_FILE, bak)
         _ok(f"백업 → {bak.name}")
-    # token/chat 은 settings.json global env 에 넣지 않는다
-    # (CC 세션/하위 프로세스 전반 토큰 확산 방지). 대신 write_hook_env() 가
-    # 만든 ~/.imadhd/env (0600) 를 config.Settings.load() 가 로드.
+    # 마이그레이션: 예전 설치가 settings.json global env 에 넣어둔
+    # TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_CHAT_ID 제거. 토큰은 이제
+    # write_hook_env() 가 만든 ~/.imadhd/env (0600) 로 격리 → CC 세션/
+    # 하위 프로세스 전반 토큰 확산 차단. env 블록이 비면 키 자체도 정리.
+    env_block = data.get("env")
+    if isinstance(env_block, dict):
+        leaked = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID") if k in env_block]
+        for k in leaked:
+            env_block.pop(k, None)
+        if leaked:
+            _ok(f"global env 토큰 {len(leaked)}개 제거 → ~/.imadhd/env 로 이전 (확산 차단)")
+        if not env_block:
+            data.pop("env", None)
+            if leaked:
+                _ok("빈 env 블록 정리")
     hooks = data.setdefault("hooks", {})
     added = 0
     for event, module, timeout, matcher in HOOK_DEFS:

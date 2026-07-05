@@ -100,7 +100,7 @@ python -m imadhd install --token 123:ABC --chat <YOUR_CHAT_ID>
 The installer runs four steps:
 1. **pm2** install + reboot survival (Windows: `pm2-windows-startup` + hardened `resurrect.cmd` calling Node by absolute path, plus a `schtasks` ONLOGON backup; Linux: `pm2 startup systemd`), then starts the router daemon.
 2. **Telegram command menu** — *merged*, not overwritten: existing bot commands preserved, only colliding names replaced.
-3. **Claude Code hooks** — `SessionStart` / `Stop` / `PreToolUse(AskUserQuestion)` / `UserPromptSubmit` added to `~/.claude/settings.json` (idempotent; existing hooks untouched; token/chat injected into `settings.json.env`).
+3. **Claude Code hooks** — `SessionStart` / `Stop` / `PreToolUse(AskUserQuestion)` / `UserPromptSubmit` added to `~/.claude/settings.json` (idempotent; existing hooks untouched). Token/chat are written to `~/.imadhd/env` (0600), **not** `settings.json`'s global `env` — and any token previously injected there by an older install is migrated out.
 4. **Telegram pin** — the status board is created and pinned on first run.
 
 Flags: `--token`, `--chat`, `--max-slots N` (default 6), `--skip-pm2`, `--skip-pin`.
