@@ -40,3 +40,12 @@ desktop.ini
 # ===== Claude Code harness (worktrees, superpowers scratch) =====
 .claude/worktrees/
 .superpowers/
+
+# ===== Internal docs (team context, not for public release) =====
+docs/plans/
+docs/design-oracle-multisession.md
+
+# ===== Local backups / sync artifacts =====
+*.bak
+*.bak.*
+*.tar.gz

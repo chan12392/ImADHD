@@ -521,7 +521,7 @@ ImADHD/                             # 레포 루트
 **수정**:
 - `pm2_resurrect.cmd` → node 절대경로 직접 호출로 재작성. PATH/node 환경 완전 무관.
   ```bat
-  "C:\Program Files\nodejs\node.exe" "%USERPROFILE%\AppData\Roaming\npm\node_modules\pm2\bin\pm2" resurrect
+  "C:\Program Files\nodejs\node.exe" "%APPDATA%\npm\node_modules\pm2\bin\pm2" resurrect
   ```
 - 이중화: `schtasks imadhd-pm2-resurrect /SC ONLOGON` 백업 등록(같은 cmd 부름). HKCU Run 키(기존) + 작업스케줄러(신규) 둘 다 → 어느 하나 살아도 부활.
 
