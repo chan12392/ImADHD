@@ -84,7 +84,7 @@ cd ImADHD
 pip install -e .
 python -m imadhd install
 # or non-interactive:
-python -m imadhd install --token 123:ABC --chat 123456789
+python -m imadhd install --token 123:ABC --chat <YOUR_CHAT_ID>
 ```
 
 **Linux** (bash):
@@ -94,7 +94,7 @@ cd ImADHD
 pip install -e .
 python -m imadhd install
 # non-interactive:
-python -m imadhd install --token 123:ABC --chat 123456789
+python -m imadhd install --token 123:ABC --chat <YOUR_CHAT_ID>
 ```
 
 The installer runs four steps:
@@ -160,9 +160,12 @@ Edit `.env`:
 | `IMADHD_TRANSPORT` | no | input transport — `sendkeys_win` (Windows) or `tmux_linux` (Linux). Auto-detected if unset. |
 | `IMADHD_REPLY_MARKER` | no | trailing phrase CC prints to trigger a reply (default `[A.D.H.D]`) |
 | `IMADHD_INJECT_METHOD` | no | Windows only: `paste` (clipboard+Ctrl+V, fast, default) or `type` (per-char SendInput, legacy) |
+| `IMADHD_SKIP_PERMS` | **no — dangerous** | Linux only: set `1` to launch Claude Code with `--dangerously-skip-permissions`. Off by default — only enable if you accept that a compromised Telegram token means arbitrary commands on the host. |
 | `IMADHD_ALLOW_ANY_CHAT` | **no — dev only** | set `1` to accept any chat without an allow-list. **Never on a public bot.** |
 
 > **🔒 `TELEGRAM_ALLOWED_CHAT_ID` is enforced fail-closed.** Anyone holding your bot token can otherwise drive your terminals, so the router **refuses to start** if this is unset. The `IMADHD_ALLOW_ANY_CHAT=1` escape hatch is for local testing only.
+
+> **🔐 Secret storage.** The installer writes the bot token to two files, both locked to `0600` on Linux/macOS: `repo/.env` (router) and `~/.imadhd/env` (Claude Code hooks). The hooks load it from there via `config.Settings.load()` — **not** from `~/.claude/settings.json`'s global `env`, so the token doesn't leak into every Claude Code session and subprocess.
 
 ## Configure Claude Code hooks
 

@@ -39,6 +39,11 @@ class Settings:
         elif env_path:
             load_dotenv(env_path)
         else:
+            # ~/.imadhd/env (0600, hook/router 공통) 우선 로드 → cwd/.env 보강.
+            # settings.json global env 대신: CC 세션/하위 프로세스에 토큰 확산 방지.
+            user_env = _data_dir_default() / "env"
+            if user_env.exists():
+                load_dotenv(user_env)
             load_dotenv()  # cwd / .env
 
         dd = os.environ.get("IMADHD_DATA_DIR", "").strip()

@@ -56,6 +56,15 @@ def _mask(token: str) -> str:
     return (token[:6] + "...") if token else "<empty>"
 
 
+def _restrict_perms(path: Path) -> None:
+    """파일 권한 0600 (Linux/macOS). Windows umask 무의미 → no-op."""
+    if os.name != "nt":
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
 # ---- subprocess helper ----
 def _run(cmd: str, check: bool = True, capture: bool = False):
     """문자열 명령 실행 (Windows shell). capture 시 CompletedProcess 반환."""
@@ -127,7 +136,25 @@ def write_env(token: str, chat: str, max_slots: int) -> None:
         if key not in seen:
             out.append(f"{key}={val}")
     ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
-    _ok(f"토큰 {_mask(token)} · 채팅 {chat} · 슬롯 {max_slots}")
+    _restrict_perms(ENV_FILE)
+    _ok(f"토큰 {_mask(token)} · 채팅 {chat} · 슬롯 {max_slots} (chmod 600)")
+
+
+def write_hook_env(token: str, chat: str) -> Path:
+    """~/.imadhd/env (0600) 에 token/chat 저장. CC 훅 전용 env 파일.
+
+    settings.json global env 대신 → CC 세션/하위 프로세스 전반에 토큰 확산 차단.
+    config.Settings.load() 가 이 파일을 자동 로드한다."""
+    data_dir = Path(os.environ.get("IMADHD_DATA_DIR", str(Path.home() / ".imadhd")))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    env_file = data_dir / "env"
+    env_file.write_text(
+        f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_ALLOWED_CHAT_ID={chat}\n",
+        encoding="utf-8",
+    )
+    _restrict_perms(env_file)
+    _ok(f"hook 전용 env → {env_file} (0600, settings.json global env 대신)")
+    return env_file
 
 
 # ============ Step 1: pm2 + 재부팅 유지 ============
@@ -352,10 +379,9 @@ def step3_hooks(token: str, chat: str) -> None:
         bak = SETTINGS_FILE.with_suffix(f".json.bak-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
         shutil.copy2(SETTINGS_FILE, bak)
         _ok(f"백업 → {bak.name}")
-    # env 주입 (CC 훅이 토큰 읽는 소스)
-    data.setdefault("env", {})
-    data["env"]["TELEGRAM_BOT_TOKEN"] = token
-    data["env"]["TELEGRAM_ALLOWED_CHAT_ID"] = chat
+    # token/chat 은 settings.json global env 에 넣지 않는다
+    # (CC 세션/하위 프로세스 전반 토큰 확산 방지). 대신 write_hook_env() 가
+    # 만든 ~/.imadhd/env (0600) 를 config.Settings.load() 가 로드.
     hooks = data.setdefault("hooks", {})
     added = 0
     for event, module, timeout, matcher in HOOK_DEFS:
@@ -444,6 +470,7 @@ def main(argv: list[str] | None = None) -> int:
 
     token, chat = resolve_credentials(args)
     write_env(token, chat, args.max_slots)
+    write_hook_env(token, chat)
 
     if args.skip_pm2:
         _warn("Step 1 건너뜀 (--skip-pm2)")

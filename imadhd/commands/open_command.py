@@ -20,6 +20,8 @@ env(ANTHROPIC_BASE_URL 등)를 그대로 물려받아 "/open"만 해도 항상 z
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -40,29 +42,30 @@ _ANTHROPIC_PROXY_ENV_KEYS = (
 )
 _GLM_ALIASES = ("glm", "z.ai", "zai")
 
-_DEFAULT_LINUX_LAUNCH = (
-    "bash -lc 'export PATH=$HOME/.local/bin:$HOME/.bun/bin:$PATH; "
-    "source $HOME/.anthropic.env 2>/dev/null || true; "
-    "{exports}"
-    "cd /home/ubuntu && exec claude --dangerously-skip-permissions{model_flag}'"
-)
+# 모델명은 안전한 문자클래스만 허용. 셸 메타/치환(`$`, `;`, `|`, backtick, 공백 등) 차단.
+_MODEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
-def build_linux_launch_cmd(base_env: dict, use_glm: bool, model: str | None) -> str:
-    """오라클(tmux) 새 세션용 claude 실행 커맨드 문자열 조립.
+def build_linux_launch_cmd(use_glm: bool, model: str | None) -> str:
+    """오라클(tmux) 새 세션용 claude 실행 커맨드 문자열 조립 (안전 버전).
 
-    build_open_env() 와 동일한 z.ai 프록시 env 정책을 bash 커맨드 안의
-    export 문으로 반영한다(Windows 는 subprocess env= 로 넘기지만, tmux
-    new-session 은 프로세스 env 를 그대로 물려주므로 셸 안에서 명시 export
-    해야 launch 시점 env 오염과 무관하게 의도한 provider 로 뜬다)."""
-    exports = ""
+    보안:
+    - GLM 토큰은 bash export 문(커맨드라인/ps/로그 노출)이 아니라
+      0600 권한의 ~/.anthropic.env 파일을 source 하는 방식으로만 주입.
+    - --dangerously-skip-permissions는 기본 off. IMADHD_SKIP_PERMS=1 일 때만.
+    - model 인자는 _MODEL_RE 로 사전 검증 + shlex.quote 이중 방어.
+    """
+    parts = ["bash -lc '"]
+    parts.append("export PATH=$HOME/.local/bin:$HOME/.bun/bin:$PATH; ")
     if use_glm:
-        for k in _ANTHROPIC_PROXY_ENV_KEYS:
-            v = base_env.get(k)
-            if v:
-                exports += f"export {k}={v!r}; "
-    model_flag = f" --model {model}" if model else ""
-    return _DEFAULT_LINUX_LAUNCH.format(exports=exports, model_flag=model_flag)
+        parts.append("source $HOME/.anthropic.env 2>/dev/null || true; ")
+    parts.append("cd /home/ubuntu && exec claude")
+    if os.environ.get("IMADHD_SKIP_PERMS") == "1":
+        parts.append(" --dangerously-skip-permissions")
+    if model:
+        parts.append(f" --model {shlex.quote(model)}")
+    parts.append("'")
+    return "".join(parts)
 
 
 def _wt_path() -> str:
@@ -97,11 +100,14 @@ def build_open_env(base_env: dict, use_glm: bool) -> dict:
 
 def parse_open_arg(arg: str) -> tuple[bool, str | None]:
     """/open 뒤 인자 → (use_glm, model). arg 없으면 (False, None).
-    GLM 별칭이면 (True, None). 그 외는 모델명으로 간주해 (False, arg)."""
+    GLM 별칭이면 (True, None). 그 외는 모델명으로 간주해 (False, arg).
+    모델명은 _MODEL_RE(안전 문자클래스) 통과해야 함 — 셸 인젝션 차단."""
     if not arg:
         return False, None
     if arg in _GLM_ALIASES:
         return True, None
+    if not _MODEL_RE.match(arg):
+        raise ValueError(f"unsafe model arg: {arg!r}")
     return False, arg
 
 
@@ -123,7 +129,14 @@ class OpenCommand(Command):
         text = (msg.text or "").strip().lower()
         parts = text.split(maxsplit=1)
         arg = parts[1].strip() if len(parts) == 2 else ""
-        use_glm, model = parse_open_arg(arg)
+        try:
+            use_glm, model = parse_open_arg(arg)
+        except ValueError:
+            ctx.telegram.send(
+                msg.chat_id,
+                "❌ 모델명에 허용되지 않는 문자가 있습니다 (A-Z a-z 0-9 . _ - 만 가능).",
+            )
+            return
 
         if use_glm:
             label = "GLM(z.ai)"
@@ -151,7 +164,7 @@ class OpenCommand(Command):
             return
 
         session_name = f"chleo-{int(time.time())}"
-        launch_cmd = build_linux_launch_cmd(os.environ, use_glm, model)
+        launch_cmd = build_linux_launch_cmd(use_glm, model)
         try:
             subprocess.run(["tmux", "new-session", "-d", "-s", session_name, launch_cmd],
                             timeout=10)
