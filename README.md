@@ -5,7 +5,7 @@
 
 Built for **Claude Code** (and any interactive TUI). Keep several terminals running on your **Windows** desktop or **Linux** server; issue work from your phone when you're away. Replies route back automatically via a `Stop` hook.
 
-- **Windows** — native `send_keys` (ctypes, no deps) into Windows Terminal / ConPTY windows.
+- **Windows** — **focus-less named-pipe injection** (`pipe_win`, default): a small PTY-bridge (`host.py`) muxes your keyboard with a named pipe, so Telegram input reaches the terminal **without stealing focus**. Falls back to native `send_keys` (`sendkeys_win`) if no bridge is running.
 - **Linux** — `tmux send-keys` into per-session tmux panes (headless servers).
 
 ## Why another Telegram↔Claude tool?
@@ -28,7 +28,7 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.2.0` — **cross-platform** (Windows `sendkeys_win` + Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.0` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
 
 ## How it works
 ```
@@ -40,15 +40,19 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
                               │  registry → #3 │
                               └───┬────────┬───┘
      inject ─────────────────────┘        └──────────── reply (Bot API)
-       (send_keys / tmux send-keys)              ▲
-              │                                              │
-        ┌─────▼─────┐                              ┌────────┴───────┐
-        │ Terminal 3 │ ──types reply ending with──▶│ Stop hook      │
-        │ (Claude)   │   "<marker>"                │ captures+routes│
-        └────────────┘                              └────────────────┘
+       (pipe_win / send_keys / tmux)             ▲
+              │                                  │  (pending flag set at inject
+        ┌─────▼─────┐                            │   marks this as a Telegram turn)
+        │ Terminal 3 │ ──CC replies──────────────┴─▶┌────────┬───────┐
+        │ (Claude)   │                              │Stop hook│       │
+        └────────────┘                              │only on  │       │
+                                                    │Telegram │       │
+                                                    │turn →   │       │
+                                                    │send+map │       │
+                                                    └────────┴───────┘
 ```
 
-- **Terminals don't know about Telegram.** The router injects keystrokes; a hook captures the reply.
+- **Terminals don't know about Telegram.** The router injects input; a `Stop` hook sends the reply back **only for Telegram-originated turns** (tracked via a pending flag), so work you type directly in the terminal stays in the terminal.
 - Terminal ↔ number mapping is tracked in a runtime registry (**Windows**: HWND + pid + session id; **Linux**: tmux pane + pid + session id) — so a renamed/recreated window/pane is rediscovered automatically.
 - **Windows:** one Claude Code session per Windows Terminal window. Run each terminal in its **own** WT window — tabs in one window can't be told apart. (Tip: `wt -w new …`, or WT `"windowingBehavior": "new"`.)
 - **Linux:** each session gets its own tmux pane (captured at `SessionStart`), so a single tmux server hosts many sessions cleanly.
@@ -61,7 +65,8 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 | `core/registry.py` | number ↔ session mapping (HWND/pid on Windows, tmux_pane/pid on Linux) |
 | `core/proc_win.py` | Windows process / window discovery (incl. stale-HWND auto-recovery) |
 | `core/reply_map.py` | reply routing by `reply_to` / pending-target |
-| `transports/` | **pluggable** terminal input — `sendkeys_win` (default on Windows), `tmux_linux` (default on Linux) |
+| `transports/` | **pluggable** terminal input — `pipe_win` (focus-less, Windows default), `sendkeys_win` (focus-stealing fallback), `tmux_linux` (Linux default) |
+| `host.py` | Windows PTY-bridge for `pipe_win`: owns the ConPTY, muxes keyboard ∪ named pipe so Telegram input never steals focus |
 | `commands/` | **pluggable** Telegram commands (`3️⃣ ...`, `/list`, `/new`, `/open`, `/close`, ...) |
 | `boards/` | status board (pinned text + ReplyKeyboard) |
 | `hooks/register_hook.py` | CC `SessionStart`: claim a number |
@@ -147,7 +152,7 @@ Type the slot number then your message. Both work:
 3️⃣ check the logs and summarize
 3 check the logs and summarize
 ```
-This injects into terminal #3. When Claude Code replies (ending with the marker), it comes back to your phone prefixed `3️⃣`.
+This injects into terminal #3. The inject sets a **pending flag** for that session; when Claude Code finishes, the `Stop` hook sees the flag, captures the reply, and routes it back to your phone prefixed `3️⃣`. Replies over the hard length limit are bounced back once with a "keep it short" nudge. Work you type **directly** in the terminal has no pending flag, so it stays local — nothing leaks to Telegram.
 
 ### Commands
 | Command | What it does |
@@ -177,8 +182,8 @@ Edit `.env`:
 | `TELEGRAM_ALLOWED_CHAT_ID` | **yes** | your Telegram user id — get it from [@userinfobot](https://t.me/userinfobot) |
 | `IMADHD_MAX_SLOTS` | no | max numbered terminals (default `6`) |
 | `IMADHD_DATA_DIR` | no | runtime data dir (default `~/.imadhd`) |
-| `IMADHD_TRANSPORT` | no | input transport — `sendkeys_win` (Windows) or `tmux_linux` (Linux). Auto-detected if unset. |
-| `IMADHD_REPLY_MARKER` | no | trailing phrase CC prints to trigger a reply (default `[A.D.H.D]`) |
+| `IMADHD_TRANSPORT` | no | input transport — `pipe_win` (Windows, focus-less, **recommended**), `sendkeys_win` (Windows, focus-stealing fallback), `tmux_linux` (Linux). The `.env` value is authoritative and overrides any ambient env var. |
+| `IMADHD_REPLY_MARKER` | no | legacy auxiliary signal (default `[A.D.H.D]`). Reply routing is driven by the **pending flag** set at inject time, not by a marker in the prompt — this is only a fallback for older inject paths. |
 | `IMADHD_INJECT_METHOD` | no | Windows only: `paste` (clipboard+Ctrl+V, fast, default) or `type` (per-char SendInput, legacy) |
 | `IMADHD_SKIP_PERMS` | **no — dangerous** | Linux only: set `1` to launch Claude Code with `--dangerously-skip-permissions`. Off by default — only enable if you accept that a compromised Telegram token means arbitrary commands on the host. |
 | `IMADHD_ALLOW_ANY_CHAT` | **no — dev only** | set `1` to accept any chat without an allow-list. **Never on a public bot.** |
@@ -207,8 +212,7 @@ Add to `~/.claude/settings.json`:
 
 The **`PreToolUse` / `AskUserQuestion`** hook makes Claude Code's clarifying questions arrive as **Telegram inline buttons** instead of stalling in the terminal. Tap an option → the answer is fed back to Claude Code and work continues — no phone-to-terminal round-trip. If no answer arrives within the timeout, the question is denied (Claude Code can re-ask). The hook is a no-op fallback (native prompt shown) when `TELEGRAM_ALLOWED_CHAT_ID` isn't configured.
 
-Then teach Claude Code to end replies with the marker (so the `Stop` hook can route them back), e.g. in your `CLAUDE.md`:
-> When a request ends with `[A.D.H.D]`, reply tersely and print `[A.D.H.D]` as the final line.
+> **No `CLAUDE.md` rule needed.** Replies are routed by a **pending flag** set at inject time, not by a trailing marker Claude Code has to print. Claude Code stays fully unaware that a turn came from Telegram — no prompt suffix, no marker echo, no behavioral rule to forget.
 
 ## Run the router
 
@@ -221,7 +225,7 @@ pm2 logs imadhd      # expect: "router start: slots=6 ..."
 
 ## Platform notes
 
-- **Windows** — input is native `send_keys` via ctypes (no tmux/pty). Default `IMADHD_INJECT_METHOD=paste` is ~77× faster than legacy per-character typing; set `IMADHD_INJECT_METHOD=type` to roll back.
+- **Windows** — `pipe_win` (default) routes Telegram input through a named pipe into a `host.py` PTY-bridge, so input lands in the terminal **without stealing window focus**. Open terminals with the bot's `/open` command so they're launched under `host.py` automatically. `sendkeys_win` is the legacy fallback: native `send_keys` via ctypes that forces the target to the foreground first — set `IMADHD_TRANSPORT=sendkeys_win` to opt in. For `sendkeys_win`, `IMADHD_INJECT_METHOD=paste` (clipboard+Ctrl+V, default) is far faster than per-character `type`.
 - **Linux** — input is `tmux send-keys` into the pane captured at `SessionStart`. Each Claude Code session runs in its own tmux session/pane; the registry tracks `tmux_pane` to target the right one. Auto-detected when `IMADHD_TRANSPORT` is unset.
 
 ## Extending

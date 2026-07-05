@@ -81,6 +81,8 @@
 - 동일 session_id(또는 동일 pid) 재시작 시 기존 슬롯 재사용(덮어쓰기).
 
 ### 4.3 pm2 폴링 데몬 — `btg-router`
+> ⚠ **14절에서 개정**: 주입 프롬프트에 `[A.D.H.D]` 마커를 부착하던 동작(아래 6.)은 **제거** — 이제 마커 없이 본문만 주입. Windows 기본 transport 도 `sendkeys_win` → `pipe_win`(14.1)으로 전환.
+
 - 위치: `imadhd/cli.py` (entry: `btg-router`)
 - pm2 이름: `imadhd`
 - 역할: 텔레그램 롱폴 → 라우팅 → 주입.
@@ -100,6 +102,8 @@
   7. 다음 offset 으로 갱신.
 
 ### 4.4 Stop 훅 — `btg-reply`
+> ⚠ **14.2에서 개정**: 마커 echo 감지 기반 회신(아래 3.)은 **폐지** — 이제 회신 여부는 주입 시 세팅되는 **pending 플래그** + 길이 게이트로 결정. 마커는 더 이상 회신 조건이 아님.
+
 - 위치: `imadhd/hooks/reply_hook.py` (entry: `btg-reply`)
 - 역할: CC 응답 종료 시 답변 캡처 → 텔레그램 회신.
 - 기존 `channel-reply-guard.py`(Stop 훅)과 **별도 추가**, 공존.
@@ -162,6 +166,7 @@
 - `proc_win.py`: `window_title(hwnd)` 추가 — `GetWindowTextW` 래핑, 실패 시 `""`.
 
 ### 4.7 Claude Code 규칙 추가 (CLAUDE.md)
+> ⚠ **14.2에서 폐지**: CLAUDE.md 의 마커 echo 규칙은 **삭제됨**(2026-07-06). 회신 라우팅이 pending 플래그 기반으로 전환되어 CC 가 텔레그램 인입 사실을 모르게 됨. 아래 규칙 텍스트는 역사 기록.
 `~/.claude/CLAUDE.md` 의 절대규칙 블록에 추가:
 > **텔레그램 요청 응답 규칙**: 프롬프트에 `[A.D.H.D]` 표시가 있으면, 표는 쓰지 말고(모바일 미렌더)
 > 핵심만 짧게(의미 단위 줄바꿈) 답한 뒤, 최종 답변의 **마지막 줄에 반드시 `[A.D.H.D]` 문구 출력**.
@@ -590,4 +595,66 @@ public 전환 후 모바일 UX + 자가진단 3종.
 ```
 
 **의존**: telegram client(token 필요) → doctor 명령은 router 컨텍스트에서 실행(이미 token 로드됨). 단독 CLI 모드도 옵션(`python -m imadhd.cli doctor`).
+
+---
+
+## 14. v0.3.1 — pipe_win 전환 + 회신 모델 개편 (2026-07-06)
+
+포커스 강제 없는 주입(named pipe + ConPTY)을 Windows 기본으로 올리고, 회신 라우팅을 마커 의존에서 **pending 플래그 + 길이 게이트**로 전면 개편. 위 4.3 / 4.4 / 4.6 / 4.6b / 4.7 의 구버전 설명(포커스 강제 send_keys, 주입 프롬프트에 마커 부착 + Stop 훅 마커 감지, CLAUDE.md 마커 규칙)은 **본절로 대체**.
+
+### 14.1 pipe_win — focus-less named-pipe 주입 (Windows 기본)
+
+**문제**: sendkeys_win(4.6)은 주입 전 대상 창을 포그라운드로 강제(`SetForegroundWindow`)해야 함 → 주입마다 **포커스 탈취**. 다른 창을 보고 있으면 방해.
+
+**해결 — PTY-bridge (`imadhd/host.py`)**:
+- 터미널을 `host.py` 아래 띄움(14.3). host.py 가 ConPTY(`pywinpty`) 생성 → Claude Code 를 PTY 자식으로 spawn.
+- host.py 는 두 입력을 PTY 에 mux:
+  1. **키보드** — 실제 타이핑 정상 동작.
+  2. **named pipe** `\\.\pipe\imadhd-slot-<N>` — router 주입 채널.
+- **와이어 프로토콜**: router 클라이언트가 UTF-8 `payload + b"\n"` 기록 → host.py 가 `\n` 까지 버퍼링 → PTY 에 `payload + "\r"` 기록(CR = TUI Enter).
+- 포커스 전환 無. 터미널이 백그라운드여도 입력 도달.
+
+**폴백**: 파이프가 없거나(수동 `claude` 실행 = bridge 無) 연결 실패 → `PipeWinTransport` 가 `SendKeysWinTransport` 로 투명 위임(`debug.log` 에 `focus hwnd=… SetFG=1 match=True` 로 확인 가능).
+
+**진단**: host.py 생명주기 → `repo/_host_diag.log`(`host start slot=N`, `pipe OK`, `pipe CONNECTED`). 이 로그가 안 쓰이면 bridge 미기동(수동으로 연 터미널).
+
+커밋: `7472b75`(도입), `21f80b0`(예외 처리 + 진단).
+
+### 14.2 회신 모델 — pending 플래그 + 길이 게이트 (마커 의존 제거)
+
+**구모델(제거)**: router 가 주입 프롬프트 말단에 `[A.D.H.D]` 마커 부착 → CLAUDE.md 규칙이 CC 에게 "마지막 줄에 마커 출력" 지시 → Stop 훅이 echo 감지 → 회신. 문제:
+- CC 가 규칙을 **잊으면** 회신 자체가 안 감(작업은 끝났는데 회신만 유실되는 silent failure).
+- 더 심각: CC 가 **직접 타이핑 턴**에 마커를 과잉 출력하면 → 텔레그램으로 새어나감(2026-07-06 session=`c4f60955` 실측).
+
+**신모델**:
+1. **주입 시** `inject_command.mark_marker_pending()` → `~/.imadhd/marker_pending/<session_id>` 파일 작성(내용 = 타임스탬프). 이 턴이 텔레그램 기원임을 나타내는 **유일 ground-truth 신호**. (함수명은 legacy 유지, 실제 의미는 '회신 대상 턴' 플래그.)
+2. **Stop 시** `reply_hook`:
+   - **플래그 無 → 비텔레그램 턴 → suppress**. 회신도 `block` 도 안 함. 직접 타이핑은 로컬에만 머뭄. (CLAUDE.md 규칙 삭제, 프롬프트에 마커 無, CC 는 텔레그램 인입 사실을 완전히 모름.)
+   - **플래그 有 + assistant 답 有 → 회신 턴**. 길이 게이트 통과 시 전송.
+   - **플래그 有 + 답 空 → 플래그 클리어, 전송 無**.
+3. **길이 게이트**: `REPLY_HARD_LIMIT`(1200자) 초과 + 재시도 아님(`stop_hook_active=False`) → 1회 "결론 먼저 700자 이하로 다시" `block`. 재시도 턴(`stop_hook_active=True`)이면 전체 전송(청크 분할로 감당). 두 번은 안 막음.
+
+`IMADHD_REPLY_MARKER` 는 **legacy 보조 신호**로만 잔존(구 inject 경로용). `MarkerCapture` 는 assistant 본문 전체를 반환(마커 잘라내기 불필요 — 주입 자체를 안 하므로).
+
+플래그 파일 TTL = `MARKER_PENDING_TTL_SEC`(1h). 죽은 세션 잔재는 읽기 시 제거.
+
+커밋: `b80c890`.
+
+### 14.3 `/open` host wrapping
+
+`/open`(및 `/open <model>`)이 **pipe-capable** 터미널을 엶: `claude` 직접 대신 `host.py` 로 감싸 띄움.
+
+Windows(detached, Windows Terminal 경유):
+```
+cmd.exe /c "cd /d <repo> && <py> -X utf8 -m imadhd.host -- claude [--model <m>]"
+```
+host.py 가 `--` 이후를 PTY 자식 명령으로 받아 ConPTY + named pipe 서버 기동. SessionStart 훅이 슬롯 클레임 → router 가 타겟 가능.
+
+(수정 전엔 `/open` 이 `claude` 를 직접 실행 → bridge/파이프 無 → pipe_win 이 항상 sendkeys_win 으로 폴백. 14절 도입 전의 실제 증상이었음.) 커밋: `a4d96f4`.
+
+### 14.4 config — .env authority (ambient env 무시)
+
+**사고(2026-07-06)**: pm2 daemon / 터미널 부모 체인에 `IMADHD_TRANSPORT=sendkeys_win` 이 세션 레벨로 깔려 있었음(persistent store 어디에도 없음 — Windows user/machine env, `settings.json`, shell profile 전부 깨끗한데 live 프로세스 트리엔 존재). `load_dotenv(override=False)`(기본값) → `.env` 의 `pipe_win` 이 무시되고 sendkeys 로 회귀.
+
+**수정**: `config.Settings.load()` 가 `~/.imadhd/env` 와 `repo/.env` 를 모두 `override=True` 로 로드. 의도된 config 가 ambient env 를 이김. 8b 절의 기존 설계 의도(settings.json global env 확산 방지)와 일치. 커밋: `56cf4e3`.
 
