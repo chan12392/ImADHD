@@ -389,12 +389,17 @@ def _scrub_token_lines(text: str) -> str:
     정상 JSON redaction 은 메모리(dict) 단에서 처리하지만, settings.json 이
     parse 실패(BOM·깨짐)하면 raw 파일을 그대로 .bad-* 로 옮기는 경로에 토큰이
     남는다. 여기선 라인/문자열 단위 regex 로 값만 <redacted> 치환.
-    JSON("k": "v") · dotenv(k=v) 양쪽 폼 커버.
+    값 폼 세 가지 전부 커버:
+      - JSON quoted  : "KEY": "value"
+      - JSON unquoted: "KEY": 12345  (숫자 chat id)
+      - dotenv       : KEY=value
     """
     import re
+    # 값 = "..." | '...' | [^,\\n\\r}]+ (콤마/개행/닫기괄호 전까지 = unquoted).
+    # f-string 안 리터럴 } 는 }} 로 escape.
     for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID"):
         text = re.sub(
-            rf'(["\']?{key}["\']?\s*[:=]\s*)["\'][^"\']*["\']',
+            rf'(["\']?{key}["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^,\n\r}}]+)',
             r'\1"<redacted>"',
             text,
         )
