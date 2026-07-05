@@ -66,6 +66,26 @@ def _restrict_perms(path: Path) -> None:
             pass
 
 
+def _write_secret(path: Path, content: str) -> None:
+    """0600 파일 생성(POSIX umask TOCTOU 방지).
+
+    write_text() 후 chmod 600 을 하면 POSIX umask 가 느슨한 환경에선 아주 짧게
+    0644 로 생성되는 창이 생긴다. os.open(..., 0o600) 은 fd 생성 단계부터
+    모드를 고정해 이 창을 없앤다. Windows os.open 은 mode 를 무시하므로
+    write_text 동등 + chmod 재확인(no-op 이중방어).
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError:
+        path.write_text(content, encoding="utf-8")
+        _restrict_perms(path)
+        return
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(content)
+    _restrict_perms(path)
+
+
 # ---- subprocess helper ----
 def _run(cmd: str, check: bool = True, capture: bool = False):
     """문자열 명령 실행 (Windows shell). capture 시 CompletedProcess 반환."""
@@ -136,8 +156,7 @@ def write_env(token: str, chat: str, max_slots: int) -> None:
     for key, val in kv.items():
         if key not in seen:
             out.append(f"{key}={val}")
-    ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
-    _restrict_perms(ENV_FILE)
+    _write_secret(ENV_FILE, "\n".join(out) + "\n")
     _ok(f"토큰 {_mask(token)} · 채팅 {chat} · 슬롯 {max_slots} (chmod 600)")
 
 
@@ -149,11 +168,10 @@ def write_hook_env(token: str, chat: str) -> Path:
     data_dir = Path(os.environ.get("IMADHD_DATA_DIR", str(Path.home() / ".imadhd")))
     data_dir.mkdir(parents=True, exist_ok=True)
     env_file = data_dir / "env"
-    env_file.write_text(
+    _write_secret(
+        env_file,
         f"TELEGRAM_BOT_TOKEN={token}\nTELEGRAM_ALLOWED_CHAT_ID={chat}\n",
-        encoding="utf-8",
     )
-    _restrict_perms(env_file)
     _ok(f"hook 전용 env → {env_file} (0600, settings.json global env 대신)")
     return env_file
 
@@ -375,15 +393,11 @@ def _save_settings(data: dict) -> None:
 def step3_hooks(token: str, chat: str) -> None:
     _step(f"Step 3 — Claude Code 훅 자동 추가 → {SETTINGS_FILE}")
     data = _load_settings()
-    # 백업
-    if SETTINGS_FILE.exists():
-        bak = SETTINGS_FILE.with_suffix(f".json.bak-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
-        shutil.copy2(SETTINGS_FILE, bak)
-        _ok(f"백업 → {bak.name}")
-    # 마이그레이션: 예전 설치가 settings.json global env 에 넣어둔
-    # TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_CHAT_ID 제거. 토큰은 이제
-    # write_hook_env() 가 만든 ~/.imadhd/env (0600) 로 격리 → CC 세션/
-    # 하위 프로세스 전반 토큰 확산 차단. env 블록이 비면 키 자체도 정리.
+    # 마이그레이션 먼저(메모리 redaction) — 백업 파일에 토큰이 잔류하지 않도록.
+    # 예전 설치가 settings.json global env 에 넣어둔 TELEGRAM_BOT_TOKEN /
+    # TELEGRAM_ALLOWED_CHAT_ID 제거. 토큰은 이제 write_hook_env() 가 만든
+    # ~/.imadhd/env (0600) 로 격리 → CC 세션/하위 프로세스 전반 토큰 확산 차단.
+    # env 블록이 비면 키 자체도 정리.
     env_block = data.get("env")
     if isinstance(env_block, dict):
         leaked = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHAT_ID") if k in env_block]
@@ -395,6 +409,12 @@ def step3_hooks(token: str, chat: str) -> None:
             data.pop("env", None)
             if leaked:
                 _ok("빈 env 블록 정리")
+    # 백업 = redacted 스냅샷(메모리 data). 디스크 원본을 그대로 복사하면 마이그레이션
+    # 전 토큰이 .bak 파일에 남는다. redacted 상태로 0600 보존.
+    if SETTINGS_FILE.exists():
+        bak = SETTINGS_FILE.with_suffix(f".json.bak-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}")
+        _write_secret(bak, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        _ok(f"백업(redacted, 0600) → {bak.name}")
     hooks = data.setdefault("hooks", {})
     added = 0
     for event, module, timeout, matcher in HOOK_DEFS:

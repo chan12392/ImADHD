@@ -148,6 +148,17 @@ def _paste_clipboard(text: str) -> bool:
                 _clipboard_set_text(bak)
             except Exception:
                 pass
+        else:
+            # 백업이 없던 경우: 주입한 텍스트가 전역 클립보드에 잔류하면 안 됨.
+            # Telegram 명령에 토큰/민감 지시가 섞일 수 있어 EmptyClipboard 로 비움.
+            try:
+                if user32.OpenClipboard(0):
+                    try:
+                        user32.EmptyClipboard()
+                    finally:
+                        user32.CloseClipboard()
+            except Exception:
+                pass
 
 
 def _type_unicode(text: str) -> None:
