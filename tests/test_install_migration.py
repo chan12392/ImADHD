@@ -93,6 +93,21 @@ def test_scrub_token_lines_masks_json_values():
     assert "<redacted>" in out
 
 
+def test_scrub_token_lines_covers_unquoted_and_dotenv():
+    """unquoted(JSON 숫자) · dotenv KEY=value 폼도 마스킹 (이전 quoted 전용 회귀)."""
+    cases = [
+        # JSON unquoted (숫자 chat id)
+        '{"TELEGRAM_ALLOWED_CHAT_ID":111222333,"TELEGRAM_BOT_TOKEN":999:ABC}',
+        # dotenv
+        'TELEGRAM_BOT_TOKEN=999:ABC\nTELEGRAM_ALLOWED_CHAT_ID=111222333\n',
+    ]
+    for raw in cases:
+        out = inst._scrub_token_lines(raw)
+        assert "111222333" not in out, f"unquoted/dotenv 값 잔류: {out}"
+        assert "999:ABC" not in out, f"unquoted/dotenv 값 잔류: {out}"
+        assert "<redacted>" in out
+
+
 def test_load_settings_parse_fail_scrubs_bad_backup(tmp_path, monkeypatch):
     """settings.json malformed/BOM → .bad-* 백업에 토큰 잔류 금지 + 원본 삭제."""
     claude_dir = tmp_path / ".claude"
