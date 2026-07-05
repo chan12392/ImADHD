@@ -37,7 +37,7 @@ def test_inject_dead_terminal_releases_slot(tmp_path):
     assert any("종료" in t for _, t in tg.sent)
 
 
-def test_inject_alive_injects_with_marker(tmp_path):
+def test_inject_alive_injects_body_only(tmp_path):
     reg = JSONFileRegistry(tmp_path / "r.json")
     reg.claim_slot("s1", hwnd=999, pid=1, cwd="c", started_at="t")
     tg, tr = FakeTG(), FakeTransport(alive=True)
@@ -45,7 +45,8 @@ def test_inject_alive_injects_with_marker(tmp_path):
     InjectCommand().handle(Message("42", "1️⃣ do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    assert "do work" in text and "[A.D.H.D]" in text
+    # 본문만 그대로 주입. 마커/표식은 붙지 않는다(CC 프롬프트 투명).
+    assert text == "do work"
     assert "\n" not in text                           # 한 줄 주입 (분할 방지)
 
 
@@ -104,7 +105,7 @@ def test_do_inject_consumes_body(tmp_path):
     do_inject(ctx, 1, "안녕 백호", "42")
     assert tr.injected is not None
     _, text = tr.injected
-    assert "안녕 백호" in text and "[A.D.H.D]" in text
+    assert text == "안녕 백호"
 
 
 def test_slash_injects_body(tmp_path):
@@ -118,7 +119,7 @@ def test_slash_injects_body(tmp_path):
     cmd.handle(Message("42", "/1 do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    assert "do work" in text and "[A.D.H.D]" in text
+    assert text == "do work"
 
 
 def test_slash_no_space_injects(tmp_path):
@@ -172,4 +173,3 @@ def test_do_inject_question_mark_becomes_mwo(tmp_path):
     text = tr.injected[1]
     assert text.startswith("뭐?")
     assert "이거뭐야" in text
-    assert "[A.D.H.D]" in text

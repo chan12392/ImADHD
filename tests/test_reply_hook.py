@@ -1,8 +1,13 @@
-"""reply_hook 순수 로직 테스트. 마커 인입 turn 에서 응답 마커 누락 감지."""
+"""reply_hook 순수 로직 테스트.
+
+2026-07-06 전환: 마커 echo 의존 제거. marker_missing → reply_too_long(길이 게이트).
+회신 결정은 reply_hook main이 pending 플래그로 하므로 여기선 길이 판정만.
+"""
 from imadhd.hooks.reply_hook import (
-    marker_missing,
+    reply_too_long,
     last_user_text_from_entries,
     _is_external_user_message,
+    REPLY_HARD_LIMIT,
 )
 
 MARKER = "[A.D.H.D]"
@@ -22,23 +27,26 @@ def _assistant(text):
     return {"message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
-def test_no_marker_in_user_message_not_blocked():
-    assert marker_missing("일반 작업 요청", "작업 끝났습니다", MARKER) is False
+# ---------- reply_too_long ----------
+
+def test_short_reply_not_too_long():
+    assert reply_too_long("짧은 답") is False
 
 
-def test_marker_in_user_but_missing_in_reply_blocked():
-    assert marker_missing(f"확인해줘 {MARKER}", "확인했습니다.", MARKER) is True
+def test_reply_under_hard_limit_ok():
+    assert reply_too_long("x" * REPLY_HARD_LIMIT) is False
 
 
-def test_marker_in_user_and_present_in_reply_ok():
-    assert marker_missing(f"확인해줘 {MARKER}", f"확인했습니다.\n{MARKER}", MARKER) is False
+def test_reply_over_hard_limit_blocked():
+    assert reply_too_long("x" * (REPLY_HARD_LIMIT + 1)) is True
 
 
-def test_marker_present_but_not_on_last_line_still_blocked():
-    """마커가 응답 도중에만 있고 마지막 줄엔 없으면 여전히 차단(echo false positive 방지 유지)."""
-    text = f"{MARKER} 이런 요청이었죠.\n네 처리했습니다."
-    assert marker_missing(f"해줘 {MARKER}", text, MARKER) is True
+def test_empty_reply_not_too_long():
+    assert reply_too_long("") is False
+    assert reply_too_long(None) is False  # type: ignore[arg-type]
 
+
+# ---------- transcript user 발화 추출 ----------
 
 def test_last_user_text_skips_tool_result_only_round():
     entries = [
