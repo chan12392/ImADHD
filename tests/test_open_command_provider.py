@@ -103,6 +103,13 @@ def _handle_and_capture(monkeypatch, text):
     from imadhd.commands.base import CommandContext
     import imadhd.commands.open_command as oc
 
+    # 이 테스트는 Windows 분기(subprocess.Popen)를 검증하는 테스트다.
+    # os.name 분기가 생긴 뒤로는 실행 플랫폼이 posix면 else(tmux) 분기를
+    # 타서 실제 tmux 명령이 호출되는 회귀가 있었다(2026-07-05 오라클에서
+    # 발견 — 진짜 tmux new-session 이 시도됨). 플랫폼 무관하게 Windows
+    # 분기를 테스트하도록 os.name 을 명시 고정한다.
+    monkeypatch.setattr(oc.os, "name", "nt")
+
     captured = {}
 
     def fake_popen(args, **kwargs):
