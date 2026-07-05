@@ -55,6 +55,7 @@ class SessionInfo:
     cwd: str
     started_at: str
     status: str = "idle"   # idle | busy (작업중 📝)
+    tmux_pane: str = ""    # Linux/tmux 전용 세션 식별자. Windows=""(미사용)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -64,7 +65,8 @@ class Registry(ABC):
     """번호 ↔ 세션 매핑 저장소 인터페이스."""
 
     @abstractmethod
-    def claim_slot(self, session_id: str, hwnd: int, pid: int, cwd: str, started_at: str) -> int:
+    def claim_slot(self, session_id: str, hwnd: int, pid: int, cwd: str, started_at: str,
+                    tmux_pane: str = "") -> int:
         """가장 낮은 빈 슬롯 할당. 반환=할당된 번호."""
 
     @abstractmethod
@@ -156,7 +158,7 @@ class JSONFileRegistry(Registry):
     def _occupied(data: dict) -> set[int]:
         return {int(k) for k, v in data.items() if v}
 
-    def claim_slot(self, session_id, hwnd, pid, cwd, started_at):
+    def claim_slot(self, session_id, hwnd, pid, cwd, started_at, tmux_pane=""):
         with self._locked():
             data = self._read()
             # 동일 session_id OR 동일 pid(CC 프로세스) → 기존 슬롯 재사용(덮어쓰기).
@@ -169,13 +171,17 @@ class JSONFileRegistry(Registry):
                     # 기존 슬롯의 정상 session_id 를 지우면 Stop 훅의 find_by_session 이
                     # 끊겨 상태가 busy 로 영구 고정된다. 새 값이 비어 있으면 기존 값 보존.
                     effective_id = session_id or v.get("session_id", "")
-                    data[k] = SessionInfo(num, effective_id, hwnd, pid, cwd, started_at).to_dict()
+                    info = SessionInfo(num, effective_id, hwnd, pid, cwd, started_at)
+                    info.tmux_pane = tmux_pane or v.get("tmux_pane", "")
+                    data[k] = info.to_dict()
                     self._write(data)
                     return num
             free = lowest_free(self._occupied(data), self.max_slots)
             if free is None:
                 return None
-            data[str(free)] = SessionInfo(free, session_id, hwnd, pid, cwd, started_at).to_dict()
+            info = SessionInfo(free, session_id, hwnd, pid, cwd, started_at)
+            info.tmux_pane = tmux_pane
+            data[str(free)] = info.to_dict()
             self._write(data)
             return free
 
