@@ -1,6 +1,8 @@
 # ===== Secrets (절대 커밋 금지) =====
 .env
 *.env
+.env.bak
+*.env.bak
 secrets.*
 !.env.example
 !*.env.example

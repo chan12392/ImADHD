@@ -28,7 +28,15 @@ class Settings:
 
     @classmethod
     def load(cls, env_path: str | os.PathLike | None = None) -> "Settings":
-        if env_path:
+        # IMADHD_ENV_FILE: 공유(gdrive 등) repo 경로와 머신별 설정을 분리하기 위한
+        # 명시적 오버라이드. 여러 머신이 같은 repo 경로를 공유(예: gdrive 동기화)
+        # 하면 cwd 탐색이 서로 다른 머신의 .env 를 덮어쓸 위험이 있다
+        # (2026-07-05 실사고: Linux 배포 설정이 gdrive 동기화로 데스크톱
+        # 백호 .env 를 덮어씀). env_path 인자보다 우선.
+        forced = os.environ.get("IMADHD_ENV_FILE", "").strip()
+        if forced:
+            load_dotenv(forced, override=True)
+        elif env_path:
             load_dotenv(env_path)
         else:
             load_dotenv()  # cwd / .env
