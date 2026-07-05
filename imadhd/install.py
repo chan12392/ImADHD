@@ -1,4 +1,4 @@
-"""imadhd install — 원라인 설치 (Windows).
+"""imadhd install — 원라인 설치 (Windows + Linux).
 
 4단계 전부 자동 + 멱등 + 백업:
   1. pm2 설치 + 재부팅 유지 (pm2-windows-startup + resurrect.cmd 절대경로 패치 + schtasks 이중화)
@@ -73,15 +73,8 @@ def _run(cmd: str, check: bool = True, capture: bool = False):
 
 
 def _which(name: str) -> str | None:
-    """PATH 에서 실행파일 찾기 (where)."""
-    try:
-        r = _run(f"where {name}", check=False, capture=True)
-        if r.returncode == 0:
-            line = (r.stdout or "").strip().splitlines()
-            return line[0] if line else None
-    except Exception:
-        pass
-    return None
+    """PATH 에서 실행파일 찾기 (플랫폼 무관, shutil.which)."""
+    return shutil.which(name)
 
 
 # ---- 토큰/채팅 확정 ----
@@ -118,7 +111,7 @@ def write_env(token: str, chat: str, max_slots: int) -> None:
         "TELEGRAM_BOT_TOKEN": token,
         "TELEGRAM_ALLOWED_CHAT_ID": chat,
         "IMADHD_MAX_SLOTS": str(max_slots),
-        "IMADHD_TRANSPORT": "sendkeys_win",
+        "IMADHD_TRANSPORT": "sendkeys_win" if os.name == "nt" else "tmux_linux",
         "IMADHD_REPLY_MARKER": "[A.D.H.D]",
     }
     seen: set[str] = set()
@@ -199,6 +192,40 @@ def _register_schtask() -> bool:
 
 
 def step1_pm2() -> None:
+    """플랫폼 분기: Windows = pm2-windows-startup + schtasks 이중화, Linux = systemd."""
+    if os.name == "nt":
+        step1_pm2_windows()
+    else:
+        step1_pm2_linux()
+
+
+def step1_pm2_linux() -> None:
+    _step("Step 1 — pm2 설치 + 재부팅 유지 (Linux/systemd)")
+    if not _which("node") or not _which("npm"):
+        raise RuntimeError("Node.js/npm 없음. Node.js 설치 후 재실행 (예: apt install nodejs npm 또는 https://nodejs.org).")
+    _ok("Node/npm 확인")
+    if not _which("pm2"):
+        _run("npm install -g pm2")
+        _ok("pm2 설치")
+    else:
+        _ok("pm2 기존")
+    # pm2 startup systemd — sudo 필요한 명령을 출력하므로 안내만 (자동실행은 사용자가 한 번)
+    r = _run("pm2 startup systemd", check=False, capture=True)
+    if r and r.returncode == 0 and r.stdout:
+        _ok("pm2 systemd startup 안내 출력 — sudo 명령이 있으면 한 번 실행하여 부팅 시 자동복구 등록")
+    else:
+        _warn("pm2 startup systemd 자동실패 — 수동 `pm2 startup systemd` 실행 권장")
+    # router 기동 (멱등)
+    if _pm2_has("imadhd"):
+        _ok("router 이미 online")
+    else:
+        _run(f'pm2 start "{PYTHON}" --name imadhd --cwd "{REPO_DIR}" -- -X utf8 -m imadhd.cli router')
+        _ok("router 기동")
+    _run("pm2 save")
+    _ok("pm2 dump 저장 (재부팅 시 복원 대상)")
+
+
+def step1_pm2_windows() -> None:
     _step("Step 1 — pm2 설치 + 재부팅 유지")
     if not _which("node") or not _which("npm"):
         raise RuntimeError("Node.js/npm 없음. https://nodejs.org 설치 후 재실행.")
