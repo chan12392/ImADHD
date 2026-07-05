@@ -168,11 +168,14 @@ class TmuxLinuxTransport(Transport):
         return InjectResult(delivered=True, method="tmux-paste-async", note="비동기 처리중")
 
     def is_alive(self, target: dict) -> bool:
-        tmux_target = _resolve_target(target)
-        if not _has_session(tmux_target):
-            return False
-        r = subprocess.run(
-            ["tmux", "list-panes", "-t", tmux_target, "-F", "#{pane_current_command}"],
-            capture_output=True, text=True, timeout=_TMUX_CMD_TIMEOUT,
-        )
-        return r.returncode == 0 and "claude" in (r.stdout or "")
+        # has-session 만으로 판단한다. 예전엔 list-panes 로 pane_current_command
+        # 에 "claude" 문자열이 있는지도 봤는데, CC 가 Bash 툴로 셸 명령을
+        # 실행하는 동안은 그 pane 의 foreground 프로세스가 일시적으로
+        # bash/python3/ssh 등으로 바뀐다 — 그때마다(하루 수십~수백 회) 이
+        # 체크가 "dead" 오판을 냈고, 라우터 폴링 루프(5~6s 마다 sweep_dead
+        # 호출)가 실제로 살아있는 Linux 배포 세션의 registry 슬롯을 지워버렸다
+        # (2026-07-05 실사고: "/open 빼고 전부 안 됨" — 슬롯이 계속
+        # release 되니 숫자 라우팅이 전부 "터미널 없음"으로 실패).
+        # tmux 세션 존재 여부만으로는 오판할 일이 없다(진짜 kill-session
+        # 되기 전까진 계속 True).
+        return _has_session(_resolve_target(target))
