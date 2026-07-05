@@ -74,3 +74,17 @@ def test_atomic_write_leaves_valid_json(tmp_path):
     reg.claim_slot("s1", 1, 1, "c", "t")
     data = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert "1" in data and data["1"]["session_id"] == "s1"
+
+
+def test_claim_slot_stores_tmux_pane(tmp_path):
+    reg = make(tmp_path / "r.json")
+    reg.claim_slot("s1", 0, 0, "c", "t", tmux_pane="%7")
+    info = reg.get(1)
+    assert info.tmux_pane == "%7"
+
+
+def test_claim_slot_default_tmux_pane_empty(tmp_path):
+    reg = make(tmp_path / "r.json")
+    reg.claim_slot("s1", 100, 1, "c", "t")  # 기존 호출부(tmux_pane 인자 없음) 하위호환
+    info = reg.get(1)
+    assert info.tmux_pane == ""
