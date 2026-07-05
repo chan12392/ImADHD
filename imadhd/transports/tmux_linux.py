@@ -9,8 +9,8 @@ tmux-poller.py(2026-07-03 LIVE 검증) 의 상태감지·주입 로직을 그대
      절대 사용 금지(입력 클리어는 idle 보장으로 사전 차단).
 
 target(registry SessionInfo.to_dict())의 hwnd/pid 는 이 transport 에서
-미사용(무의미) — 세션 하나당 tmux 세션 이름 하나로 고정 주소(단일 창
-분할 없음, IMADHD_TMUX_TARGET 환경변수, 기본 'claude').
+미사용(무의미) — target["tmux_pane"](세션별 tmux pane id)을 우선 쓰고,
+없으면(구버전 슬롯) IMADHD_TMUX_TARGET 환경변수(기본 'claude')로 폴백한다.
 """
 from __future__ import annotations
 
@@ -158,8 +158,11 @@ def _inject_worker(tmux_target: str, text: str) -> None:
 class TmuxLinuxTransport(Transport):
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
         tmux_target = _resolve_target(target)
-        st = _wait_idle(tmux_target, timeout=45.0)
-        if st == "dead":
+        # dead 여부만 가볍게(동기) 확인 — 이 이상(_wait_idle 의 최대 45s
+        # busy-polling)을 여기서 동기로 하면 2026-07-05 실사고("ping 보내고
+        # 답 없어서 다시 물으니 그제서야 pong 도착")가 재발한다(라우터
+        # 폴링 자체가 그동안 멈춤). idle 대기는 전부 워커 스레드 몫.
+        if not _has_session(tmux_target):
             return InjectResult(delivered=False, method="tmux-paste", note="tmux session dead")
         threading.Thread(target=_inject_worker, args=(tmux_target, text), daemon=True).start()
         return InjectResult(delivered=True, method="tmux-paste-async", note="비동기 처리중")
