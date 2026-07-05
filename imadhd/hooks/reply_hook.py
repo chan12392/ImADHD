@@ -305,18 +305,30 @@ def main() -> int:
     # 마크다운 → Telegram HTML 렌더(코드블록/굵게/이탤릭). Markdown V1 은 코드펜스
     # 미지원 → 400 → plain 폴백 되는 문제 해결. HTML 모드 + md_to_tg_html 변환.
     # 변환/전송 실패 시 plain 폴백.
+    sent_id = None
     try:
-        tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
+        sent_id = tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
         _debug_log(f"[reply] sent HTML ok session={session_id[:8]}")
     except Exception as e1:
         # plain 폴백도 실패하면(4096자 초과 외 사유) 여기서 죽지 않고 조용히 포기.
         # 이 예외를 못 잡으면 Stop 훅 자체가 죽어 idle 복귀는 됐어도 회신이
         # 통째로 유실된다(2026-07-04 발견).
         try:
-            tg.send(s.allowed_chat_id, msg)
+            sent_id = tg.send(s.allowed_chat_id, msg)
             _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} (html err={e1!r})")
         except Exception as e2:
+            sent_id = None
             _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={e1!r} plain_err={e2!r}")
+    # 답장 라우팅 매핑: 봇 송신 message_id → 이 세션 터미널번호.
+    # 대표님이 이 메시지에 "답장"하면 router 가 reply_to_message.message_id 로
+    # 이 번호를 찾아 해당 터미널로 주입(2+ 터미널 명시적 라우팅).
+    # 긴 회신은 청크 분할 → sent_id=마지막 청크. 마지막 메시지에 답장해야 매핑 적중.
+    if sent_id and info:
+        try:
+            from ..core.reply_map import store as store_reply_map
+            store_reply_map(s.data_dir, sent_id, info.number)
+        except Exception as e:
+            _debug_log(f"[reply] reply_map store failed session={session_id[:8]} err={e!r}")
     return 0
 
 

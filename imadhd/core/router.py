@@ -208,6 +208,22 @@ def run(settings: "Settings") -> None:
                 continue
             msg = Message(chat_id=str(chat), text=text, raw=upd)
             handled = False
+            # 답장(reply_to) 라우팅: 봇 메시지에 "답장" = 명시적 타겟(2+ 터미널).
+            # reply_hook 가 송신 시 {message_id: 터미널번호} 매핑 저장 → 인입 update 의
+            # reply_to_message.message_id 로 역추적. 매핑 미적중(만료/타겟이 안 닿는
+            # 청크경계) 시 폴백으로 아래 pending/자동타겟/명령 흐름으로 진행.
+            if text and not handled:
+                rmsg_id = ((m.get("reply_to_message") or {}).get("message_id"))
+                if rmsg_id:
+                    from ..core.reply_map import lookup_num as _lookup_reply_num
+                    mapped = _lookup_reply_num(settings.data_dir, rmsg_id)
+                    if mapped:
+                        try:
+                            do_inject(ctx, mapped, text, str(chat))
+                            board.refresh_if_changed(pending_num=None)
+                            handled = True
+                        except Exception as e:
+                            log.exception("reply-to inject failed: %s", e)
             # 선택모드 pending: 번호 없는 본문 → 대기 번호로 주입
             if text and parse_leading_number(text) is None:
                 pend = ctx.pending.get(str(chat))
