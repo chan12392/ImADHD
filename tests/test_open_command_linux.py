@@ -44,13 +44,32 @@ def test_linux_open_model_arg_passed_to_launch_cmd(monkeypatch):
     assert "--model opus" in captured["args"][5]
 
 
-def test_linux_open_glm_keeps_proxy_env_in_launch_cmd(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
+def test_linux_open_glm_sources_anthropic_env_file(monkeypatch):
     captured, _ = _handle_linux(monkeypatch, "/open glm")
-    assert "ANTHROPIC_BASE_URL" in captured["args"][5]
+    # GLM 토큰은 bash export(커맨드라인/ps 노출) 대신 0600 env 파일 source 로 주입.
+    assert "source $HOME/.anthropic.env" in captured["args"][5]
+    assert "export ANTHROPIC_" not in captured["args"][5]
 
 
-def test_linux_open_default_strips_proxy_env_from_launch_cmd(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
+def test_linux_open_default_does_not_source_proxy_env(monkeypatch):
     captured, _ = _handle_linux(monkeypatch, "/open")
-    assert "ANTHROPIC_BASE_URL" not in captured["args"][5]
+    # GLM 아닐 땐 anthropic.env source 안 함 (공식 Anthropic = ~/.claude 자격증명).
+    assert "anthropic.env" not in captured["args"][5]
+
+
+def test_linux_open_rejects_shell_injection_in_model(monkeypatch):
+    captured, tg = _handle_linux(monkeypatch, "/open $(touch /tmp/pwn)")
+    # 모델명 검증 실패 → tmux 실행 안 함
+    assert "args" not in captured
+    assert any("허용되지 않는 문자" in t for t in tg.sent)
+
+
+def test_linux_open_no_skip_perms_by_default(monkeypatch):
+    captured, _ = _handle_linux(monkeypatch, "/open")
+    assert "--dangerously-skip-permissions" not in captured["args"][5]
+
+
+def test_linux_open_skip_perms_env_opt_in(monkeypatch):
+    monkeypatch.setenv("IMADHD_SKIP_PERMS", "1")
+    captured, _ = _handle_linux(monkeypatch, "/open")
+    assert "--dangerously-skip-permissions" in captured["args"][5]
