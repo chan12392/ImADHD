@@ -66,8 +66,12 @@ class Registry(ABC):
 
     @abstractmethod
     def claim_slot(self, session_id: str, hwnd: int, pid: int, cwd: str, started_at: str,
-                    tmux_pane: str = "") -> int:
-        """가장 낮은 빈 슬롯 할당. 반환=할당된 번호."""
+                    tmux_pane: str = "", force_slot: int | None = None) -> int:
+        """가장 낮은 빈 슬롯 할당. 반환=할당된 번호.
+
+        force_slot: 특정 N 강제(호스트 PTY-bridge 가 IMADHD_WANT_SLOT 으로
+        미리 파이프를 열어둔 경우). 해당 슬롯이 비어 있고 범위 내일 때만 적용,
+        이미 점유/불가면 기본 lowest_free 로 폴백."""
 
     @abstractmethod
     def get(self, number: int) -> Optional[SessionInfo]:
@@ -158,7 +162,8 @@ class JSONFileRegistry(Registry):
     def _occupied(data: dict) -> set[int]:
         return {int(k) for k, v in data.items() if v}
 
-    def claim_slot(self, session_id, hwnd, pid, cwd, started_at, tmux_pane=""):
+    def claim_slot(self, session_id, hwnd, pid, cwd, started_at, tmux_pane="",
+                   force_slot=None):
         with self._locked():
             data = self._read()
             # 동일 session_id OR 동일 pid(CC 프로세스) → 기존 슬롯 재사용(덮어쓰기).
@@ -176,6 +181,16 @@ class JSONFileRegistry(Registry):
                     data[k] = info.to_dict()
                     self._write(data)
                     return num
+            # host PTY-bridge 가 미리 IMADHD_WANT_SLOT=N 으로 파이프를 열어둔 경우:
+            # 해당 슬롯이 비어 있고 범위 내일 때 그 N 을 강제. 이미 점유/불가면 폴백.
+            if force_slot is not None and 1 <= int(force_slot) <= self.max_slots \
+                    and int(force_slot) not in self._occupied(data):
+                n = int(force_slot)
+                info = SessionInfo(n, session_id, hwnd, pid, cwd, started_at)
+                info.tmux_pane = tmux_pane
+                data[str(n)] = info.to_dict()
+                self._write(data)
+                return n
             free = lowest_free(self._occupied(data), self.max_slots)
             if free is None:
                 return None

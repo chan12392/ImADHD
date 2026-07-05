@@ -22,6 +22,8 @@ dependencies = ["python-dotenv>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]
+# 포커스 탈취 없는 주입(host PTY-bridge)에만 필요. Windows 전용.
+windows-host = ["pywinpty>=0.5", "pywin32>=306"]
 
 [project.scripts]
 # 라우터 데몬 (pm2 로 실행)
