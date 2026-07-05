@@ -102,6 +102,17 @@ def _is_valid_handle(h) -> bool:
     return bool(h) and h != INVALID_HANDLE_VALUE and h != 0
 
 
+def _host_log(msg: str) -> None:
+    """PoC 진단용 로그. ~/.imadhd(라이브 상태) 말고 repo 루트에 쓴다."""
+    try:
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "_host_diag.log"
+        with p.open("a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except Exception:
+        pass
+
+
 # ────────────────────────── Console size ──────────────────────────
 
 def get_console_size() -> tuple[int, int]:
@@ -289,12 +300,21 @@ def pipe_server_loop(slot: int, pty, stop_event: threading.Event) -> None:
     """
     while not stop_event.is_set():
         try:
-            _, handle = _make_pipe_instance(slot)
-        except Exception:
+            name, handle = _make_pipe_instance(slot)
+        except Exception as e:
+            _host_log(f"pipe create FAILED slot={slot} err={e!r}")
             return
+        _host_log(f"pipe OK slot={slot} name={name} pre-connect")
+        connected = False
         try:
             win32pipe.ConnectNamedPipe(handle, None)
-        except pywintypes.error:
+            connected = True
+            _host_log(f"pipe CONNECTED slot={slot} client arrived")
+        except pywintypes.error as e:
+            _host_log(f"pipe connect winerr slot={slot} winerror={e.winerror} str={e.strerror}")
+        except Exception as e:
+            _host_log(f"pipe connect UNCAUGHT slot={slot} type={type(e).__name__} err={e!r}")
+        if not connected:
             try:
                 win32file.CloseHandle(handle)
             except Exception:
@@ -475,6 +495,8 @@ def main() -> int:
     if not ok:
         sys.stderr.write("host: pty.spawn returned False\n")
         return 2
+
+    _host_log(f"host start slot={slot} child={child_argv[:2]} spawned ok")
 
     stop_event = threading.Event()
     # pipe server thread — daemon: 프로세스 종료 시 같이 죽음(ConnectNamedPipe 블록 회피).
