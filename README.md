@@ -107,6 +107,26 @@ Flags: `--token`, `--chat`, `--max-slots N` (default 6), `--skip-pm2`, `--skip-p
 
 > Install asks for `TELEGRAM_ALLOWED_CHAT_ID` (your user id from [@userinfobot](https://t.me/userinfobot)) and refuses to proceed without it — a public bot token alone would let anyone drive your terminals, so it's enforced **fail-closed**.
 
+### Uninstall
+
+One line undoes everything install did — in reverse, surgically, and preserving your own customizations:
+
+```bash
+python -m imadhd uninstall          # confirmation prompt
+python -m imadhd uninstall --yes    # non-interactive (automation)
+python -m imadhd uninstall --skip-pm2
+```
+
+It removes, in order:
+1. **pm2** ImADHD processes + `pm2 save` (Windows: the ONLOGON `schtasks` entry; Linux: you run `sudo pm2 unstartup systemd` — needs root, so it's advised not silent-skipped).
+2. **Telegram command menu** — *surgical*: only ImADHD's command names are filtered out (both `default` and `all_private_chats` scopes); your own bot commands are preserved. Empty scope → `deleteMyCommands`.
+3. **Claude Code hooks** — the 4 ImADHD hook groups are dropped from `~/.claude/settings.json`; your other hooks/settings are untouched. A **redacted** backup (`settings.json.bak-uninstall-<ts>`, mode 0600) is written first.
+4. **Telegram pin** — `unpinChatMessage` + delete (best-effort).
+5. **data_dir** (`~/.imadhd`, including the token `env`) — wiped.
+6. **`repo/.env`** — only ImADHD keys removed; if nothing else remains the file is deleted, otherwise rewritten mode 0600.
+
+The token is never printed or logged anywhere. Everything is idempotent — missing pieces are skipped. The repo directory and the pip package are left for you to remove (`rm -rf ImADHD && pip uninstall imadhd`).
+
 ### Manual (fallback / dev)
 
 ```bash
