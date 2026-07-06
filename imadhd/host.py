@@ -230,9 +230,54 @@ def parse_args(argv: list[str]) -> tuple[int | None, list[str]]:
     return slot, rest
 
 
+def _resolve_claude_exe(child_argv: list[str]) -> list[str] | None:
+    """`claude` → npm 패키지 bin/claude.exe 직접 경로 해석.
+
+    npm global shim(claude / claude.CMD / claude.ps1) 은 cmd.exe / sh 를 거쳐
+    결국 `node_modules/@anthropic-ai/claude-code/bin/claude.exe` 를 exec 한다
+    (실측 2026-07-06: claude.exe = 240MB 단일 바이너리, node 래핑 아님).
+    이 shim 을 host PTY 직자식으로 spawn 하면 cmd.exe/sh 가 종료되며 PTY 가
+    닫히고 → claude.exe 가 TTY 없이 고아화(2026-07-06 실사고: transcript
+    한 줄도 안 써짐, host.py 즉시 exit code 1).
+
+    회피: shim 을 역추적해 bin/claude.exe 를 **직접** PTY 자식으로 spawn.
+    그러면 PTY 직자식 = claude.exe 그 자체 → 자식이 살아있는 한 PTY 안 닫힘.
+
+    반환: [claude.exe경로, *rest]. 해석 실패(미설치/구조변경) → None.
+    호출자는 None 시 기존 cmd.exe /c 폴백 유지(안전망).
+    """
+    if not child_argv:
+        return None
+    base = os.path.basename(child_argv[0]).lower()
+    if base not in ("claude", "claude.exe"):
+        return None
+    # shim 위치 탐색(PATHEXT 자동). Windows 에선 보통 claude.CMD 잡힘.
+    shim = None
+    for cand in ("claude", "claude.cmd", "claude.bat", "claude.exe"):
+        try:
+            r = shutil.which(cand)
+        except Exception:
+            r = None
+        if r:
+            shim = r
+            break
+    if not shim:
+        return None
+    # shim dirname = npm global bin. 그 아래 표준 패키지 경로.
+    exe = os.path.join(
+        os.path.dirname(shim),
+        "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe",
+    )
+    # LESSONLOOP(파싱 검증): 경로 실존 isfile 필수. 없으면 폴백 경로 위임.
+    if os.path.isfile(exe):
+        return [exe, *child_argv[1:]]
+    return None
+
+
 def _resolve_child(child_argv: list[str]) -> list[str]:
     """CreateProcessW 는 .cmd/.bat 을 직접 못 돌린다(claude.CMD 등 npm shim).
-    shutil.which(PATH+PATHEXT 검색) 로 해석 후:
+    우선 _resolve_claude_exe 로 bin/claude.exe 직접 해석 시도(PTY 고아화 방지).
+    실패 시 shutil.which(PATH+PATHEXT 검색) 폴백:
       - .bat/.cmd → ['cmd.exe', '/c', resolved] + rest
       - .exe/.com → [resolved] + rest
       - 미해석(경로 이미 명시/없음) → 원본 그대로(spawn 에 위임)
@@ -240,6 +285,10 @@ def _resolve_child(child_argv: list[str]) -> list[str]:
     """
     if not child_argv:
         return ["claude"]
+    # claude → bin/claude.exe 직접(PTY 직자식=claude.exe). 실패 시 아래 폴백.
+    direct = _resolve_claude_exe(child_argv)
+    if direct:
+        return direct
     app = child_argv[0]
     # 이미 경로 포함 or 확장자 명시 → 그대로
     if (os.path.sep in app or (os.altsep and os.altsep in app)
@@ -352,6 +401,21 @@ def pipe_server_loop(slot: int, pty, stop_event: threading.Event) -> None:
 
 # ────────────────────────── Keyboard forwarder ──────────────────────────
 
+def _decode_console_input(data: bytes, cp: int) -> str:
+    """콘솔 STDIN 바이트 → str. 콘솔 입력 CP(GetConsoleCP) 기반 디코딩.
+
+    한국어 Windows 콘솔 입력 CP=949(기본). 예전 코드는 utf-8 하드코딩 →
+    한글 바이트(CP949)를 UTF-8 로 오해석 → mojibake(영어 ASCII 는 CP 무관
+    정상). CP 를 직접 읽어 맞춤: CP=65001(UTF-8) → utf-8, 그 외 → 'cp<N>'.
+    알 수 없는 CP 코드 → utf-8 replace 폴백.
+    """
+    enc = "utf-8" if cp == 65001 else f"cp{cp}"
+    try:
+        return data.decode(enc, "replace")
+    except LookupError:
+        return data.decode("utf-8", "replace")
+
+
 def keyboard_loop(pty, stop_event: threading.Event) -> None:
     """호스트 STDIN(raw 모드) → PTY.
 
@@ -371,6 +435,10 @@ def keyboard_loop(pty, stop_event: threading.Event) -> None:
         # raw VT 입력: line/echo/processed 끄고 VT 입력만 켠다.
         if not k32.SetConsoleMode(h_in, ENABLE_VIRTUAL_TERMINAL_INPUT):
             return
+        try:
+            _host_log(f"kbd start CP={k32.GetConsoleCP()} OutCP={k32.GetConsoleOutputCP()} mode=VT_INPUT")
+        except Exception:
+            pass
     except Exception:
         return
     try:
@@ -382,7 +450,12 @@ def keyboard_loop(pty, stop_event: threading.Event) -> None:
             if not data:
                 break
             try:
-                text = data.decode("utf-8", "replace")
+                if any(b & 0x80 for b in data):
+                    _host_log(f"kbd raw hex={data.hex()} len={len(data)} cp={k32.GetConsoleCP()}")
+            except Exception:
+                pass
+            try:
+                text = _decode_console_input(data, k32.GetConsoleCP())
                 if pty.isalive():
                     pty.write(text)
             except Exception:

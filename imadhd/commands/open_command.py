@@ -157,16 +157,14 @@ class OpenCommand(Command):
         if os.name == "nt":
             env = build_open_env(os.environ, use_glm)
             claude_cmd = ["claude"] if not model else ["claude", "--model", model]
-            # WT 탭에서 claude 를 직접 실행(수동 터미널과 동등). host.py(winpty PTY
-            # + named-pipe 서버) 래핑은 한때 pipe 기반 백그라운드(포커스 무점유) 주입
-            # 용이었으나, 현재 transport=sendkeys(포커스 주입)라 파이프 서버를 쓰지
-            # 않는다. host.py 경로는 npm shim(cmd /c claude.cmd)이 node(claude.exe)
-            # 를 띄운 뒤 즉시 exit → winpty PTY 자식 사망 → host.py 종료(code 1) →
-            # claude.exe 가 TTY 없이 고아화돼 transcript 도 안 쓰고 입력도 처리 못
-            # 하는 버그가 있어 제거(2026-07-06 실측). 직접 실행 시 WT 탭이 진짜 TTY
-            # 를 제공하므로 수동 터미널과 동일하게 동작(sync_alive 가 등록, sendkeys
-            # 가 주입, transcript 정상 작성 → 회신 경로까지 정상).
-            inner = f'cd /d "{_REPO_ROOT}" && ' + subprocess.list2cmdline(claude_cmd)
+            # host.py PTY-bridge 래핑 복원(2026-07-06). host 가 bin/claude.exe 를
+            # PTY 직자식으로 spawn(npm shim 의 cmd.exe/sh 우회 → 고아화 원천 차단)
+            # → named-pipe 서버(\\.\pipe\imadhd-slot-N) 상주 → transport=pipe_win 이
+            # 포커스 강제 전환 없이 텔레그램 입력 주입. IMADHD_WANT_SLOT 으로
+            # register_hook 이 동일 slot 강제 claim(host-자식 slot 정렬).
+            # host 인자: [--] 뒤 child args 를 그대로 claude 에 전달.
+            inner_parts = [f'cd /d "{_REPO_ROOT}" && py -m imadhd.host --'] + claude_cmd
+            inner = " ".join(inner_parts)
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
