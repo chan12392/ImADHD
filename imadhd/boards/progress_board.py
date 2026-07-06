@@ -55,7 +55,11 @@ class ProgressBoard:
         entry = self.msgs.get(num)
         try:
             if entry is None:
-                mid = self.tg.send(self.chat_id, f"🟡 {_slot_label(info)} 작업중 (1s)")[0]
+                # 무음 전송 — "작업중" 카운터 알림음 방지 (대표님 지시 2026-07-07).
+                # edit_message_text 는 본래 알림음 없음 → 최초 send 만 mute.
+                mid = self.tg.send(
+                    self.chat_id, f"🟡 {_slot_label(info)} 작업중 (1s)",
+                    disable_notification=True)[0]
                 self.msgs[num] = {"msg_id": mid, "start": time.time()}
             else:
                 elapsed = max(1, int(time.time() - entry["start"]))
