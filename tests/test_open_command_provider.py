@@ -129,9 +129,10 @@ def _handle_and_capture(monkeypatch, text):
 
 def test_handle_model_arg_adds_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open opus")
-    # host.py PTY-bridge 래핑(2026-07-06 복원). inner = `py -m imadhd.host -- claude --model opus`.
+    # claude WT 탭 직접 실행(2026-07-06 host.py 제거). inner = `cd /d <repo> && claude --model opus`.
     inner = captured["args"][-1]
-    assert "imadhd.host" in inner
+    assert "imadhd.host" not in inner
+    assert "claude" in inner
     assert inner.endswith("claude --model opus")
     assert "opus" in tg.sent[-1]
 
@@ -139,7 +140,8 @@ def test_handle_model_arg_adds_model_flag(monkeypatch):
 def test_handle_bare_open_no_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open")
     inner = captured["args"][-1]
-    assert "imadhd.host" in inner
+    assert "imadhd.host" not in inner
+    assert "claude" in inner
     assert inner.endswith("claude")
     assert "--model" not in inner
 
@@ -147,6 +149,7 @@ def test_handle_bare_open_no_model_flag(monkeypatch):
 def test_handle_glm_arg_no_model_flag(monkeypatch):
     captured, tg = _handle_and_capture(monkeypatch, "/open glm")
     inner = captured["args"][-1]
-    assert "imadhd.host" in inner
+    assert "imadhd.host" not in inner
+    assert "claude" in inner
     assert inner.endswith("claude")
     assert "GLM" in tg.sent[-1]

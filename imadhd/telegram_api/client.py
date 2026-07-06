@@ -38,6 +38,33 @@ class TelegramClient:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 
+    def download_file(self, file_id: str, dest_path) -> Path:
+        """텔레그램 파일 다운로드(TG→CC 이미지 수신용). getFile → file_path → 다운로드.
+
+        dest_path=저장 경로(Path|str). 부모 디렉토리 자동 생성. 반환=저장 Path.
+        텔레그램 photo는 항상 jpg(확장자 호출자 책임)."""
+        resp = self._api("getFile", {"file_id": file_id}, timeout=30)
+        file_path = (resp.get("result") or {}).get("file_path")
+        if not file_path:
+            raise RuntimeError("getFile: file_path 없음")
+        url = f"https://api.telegram.org/file/bot{self.token}/{file_path}"
+        dest = Path(dest_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(url)
+        fd, tmp = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    f.write(r.read())
+            os.replace(tmp, dest)   # 원자적(부분 쓰기 시 .tmp 잔재만)
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        return dest
+
     def get_updates(self, timeout: int = 30) -> list:
         # message(본문/ReplyKeyboard 클릭) + callback_query(인라인 버튼 탭) 수신.
         # callback_query = AskUserQuestion 인라인 답변 버튼용.

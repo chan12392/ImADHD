@@ -166,6 +166,8 @@ def _type_unicode(text: str) -> None:
     \n/\r 은 CC 터미널에서 Enter(제출)로 작동 → 스페이스로 치환(분할 주입 방지).
     """
     text = text.replace("\r", " ").replace("\n", " ")
+    sent_total = 0
+    expected = 2 * len(text)
     for ch in text:
         scan = ord(ch)
         down = _INPUT()
@@ -179,10 +181,14 @@ def _type_unicode(text: str) -> None:
         up.ki.wScan = scan
         up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
         arr = (_INPUT * 2)(down, up)
-        user32.SendInput(2, arr, ctypes.sizeof(_INPUT))
+        n = user32.SendInput(2, arr, ctypes.sizeof(_INPUT))
+        sent_total += int(n or 0)
         time.sleep(0.01)
     user32.keybd_event(VK_RETURN, 0, 0, 0)
     user32.keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0)
+    # 진단: sent==expected → SendInput 자체는 OK (그럼 WT 가 입력 무시 = type 방식 한계).
+    # sent<expected → 전송 단계부터 누락.
+    _diag_log(f"[type] len={len(text)} sent={sent_total}/{expected} first_char={text[:1]!r}")
 
 
 def _diag_log(line: str) -> None:
@@ -283,6 +289,16 @@ class SendKeysWinTransport(Transport):
 
     def _focus_type(self, hwnd, text: str) -> bool:
         focus_ok = self._acquire_focus(hwnd)
+        # 전경창이 target 인지 재확인 + 전경창 클래스명(WT=WindowsTerminal? 다른?) 로그.
+        after_fg = user32.GetForegroundWindow() or 0
+        fg_class = ""
+        try:
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(after_fg, buf, 256)
+            fg_class = buf.value
+        except Exception:
+            pass
+        _diag_log(f"[inject-method] method={_INJECT_METHOD} hwnd_target={hwnd} hwnd_fg={after_fg} class={fg_class!r} focus_ok={focus_ok} match={after_fg==hwnd} len={len(text)}")
         if _INJECT_METHOD == "type":
             _type_unicode(text)
         else:

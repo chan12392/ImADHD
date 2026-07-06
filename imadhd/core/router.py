@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import time
 import urllib.error
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -105,6 +106,8 @@ def run(settings: "Settings") -> None:
     from ..commands.close_command import CloseCommand
     from ..commands.stop_command import StopCommand
     from ..commands.help_command import HelpCommand
+    from ..commands.update_adhd_command import UpdateAdhdCommand
+    from ..commands.update_cc_command import UpdateCcCommand
     from ..commands.use_command import UseCommand
     from ..commands.doctor_command import DoctorCommand
     from ..core import sticky as sticky_store
@@ -121,7 +124,8 @@ def run(settings: "Settings") -> None:
     commands = [
         PinCommand(board), ListCommand(), NewCommand(),
         OpenCommand(), CloseCommand(), StopCommand(),
-        UseCommand(), DoctorCommand(), HelpCommand(), InjectCommand(),
+        UseCommand(), DoctorCommand(), HelpCommand(),
+        UpdateAdhdCommand(), UpdateCcCommand(), InjectCommand(),
     ]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
     # 고정 타겟(sticky) 영속 파일 로드 — /use N 으로 설정한 chat→slot 복원.
@@ -140,6 +144,7 @@ def run(settings: "Settings") -> None:
         선택 표시로 edit + 버튼 제거(중복 클릭 방지).
         """
         from ..core import ask_manager
+        from ..core import perm_manager
         cq = cbq.get("id", "")
         cbdata = cbq.get("data", "") or ""
         cmsg = cbq.get("message") or {}
@@ -150,6 +155,50 @@ def run(settings: "Settings") -> None:
                 tg.answer_callback(cq, "⚠️ 허용되지 않은 채팅")
             except Exception:
                 pass
+            return
+        # p: = 위험도구 승인(perm_hook PreToolUse). a: = AskUserQuestion(ask_hook).
+        if cbdata.startswith("p:"):
+            parsed = perm_manager.parse_callback(cbdata)
+            if not parsed:
+                try:
+                    tg.answer_callback(cq, "⚠️ 알 수 없는 버튼")
+                except Exception:
+                    pass
+                return
+            perm_id, choice = parsed
+            record = perm_manager.load_record(settings.data_dir, perm_id)
+            if not record:
+                try:
+                    tg.answer_callback(cq, "⚠️ 만료된 승인")
+                except Exception:
+                    pass
+                return
+            # 중복 클릭 → 현재 상태만 안내, 변경 없음.
+            if record.get("answer") in ("yes", "no"):
+                try:
+                    tg.answer_callback(cq, "이미 처리됨")
+                except Exception:
+                    pass
+                return
+            record["answer"] = choice
+            record["status"] = "approved" if choice == "yes" else "denied"
+            perm_manager.write_record(settings.data_dir, record)
+            try:
+                tg.answer_callback(cq, "✅ 승인" if choice == "yes" else "🚫 거부")
+            except Exception:
+                pass
+            # 메시지 결과 표시로 edit + 버튼 제거(빈 inline_keyboard).
+            message_id = record.get("message_id")
+            if message_id:
+                mark = "✅ 승인됨" if choice == "yes" else "🚫 거부됨"
+                try:
+                    tg.edit_message_text(
+                        str(chat), message_id,
+                        f"{mark}:\n{record.get('summary', '')}",
+                        reply_markup={"inline_keyboard": []},
+                    )
+                except Exception as e:
+                    log.warning("perm edit_message failed: %s", e)
             return
         parsed = ask_manager.parse_callback(cbdata)
         if not parsed:
@@ -222,6 +271,56 @@ def run(settings: "Settings") -> None:
         except (TypeError, ValueError):
             return None
 
+    def _handle_photo(m: dict, chat: str, update_id) -> None:
+        """TG→CC 이미지: 가장 큰 size 다운로드 → inbox 저장 → 활성 CC에 경로 주입.
+
+        CC는 텍스트 입력만 받으므로 이미지를 inbox 디렉토리에 저장하고 **경로**를
+        주입 → CC가 Read 도구로 이미지 분석(멀티모달). slot 해석 = pending →
+        sticky → active 단일. 캡션은 본문에 추가."""
+        photos = m.get("photo") or []
+        if not photos:
+            return
+        biggest = max(photos, key=lambda p: p.get("file_size") or 0)
+        file_id = biggest.get("file_id")
+        if not file_id:
+            return
+        img_dir = Path(settings.data_dir) / "inbox"
+        uid = update_id if update_id is not None else (file_id[:8] or "x")
+        dest = img_dir / f"tg_{uid}.jpg"   # 텔레그램 photo = 항상 jpg
+        try:
+            path = tg.download_file(file_id, dest)
+        except Exception as e:
+            tg.send(chat, f"❌ 이미지 다운로드 실패: {e!r}")
+            return
+        # slot 해석: pending → sticky → active 단일
+        num: int | None = None
+        pend = ctx.pending.get(chat)
+        if pend:
+            num = pend[0]
+        if num is None:
+            stick = ctx.sticky.get(chat)
+            if stick is not None:
+                try:
+                    num = int(stick)
+                except (TypeError, ValueError):
+                    num = None
+        if num is None:
+            actives = reg.active()
+            if len(actives) == 1:
+                num = actives[0].number
+        if num is None:
+            tg.send(chat, f"✅ 이미지 저장: {path}\n(열린 CC 없음 — 번호 지정 후 재전송)")
+            return
+        caption = (m.get("caption") or "").strip()
+        body = f"이미지 수신: {path}"
+        if caption:
+            body += f"\n{caption}"
+        try:
+            do_inject(ctx, num, body, chat)
+            tg.send(chat, f"📸 이미지 → {num}번 ({path.name})")
+        except Exception as e:
+            tg.send(chat, f"❌ 주입 실패: {e!r}")
+
     log.info("router start: slots=%d data_dir=%s", settings.max_slots, settings.data_dir)
     try:
         board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
@@ -292,6 +391,15 @@ def run(settings: "Settings") -> None:
                 continue
             msg = Message(chat_id=str(chat), text=text, raw=upd)
             handled = False
+            # TG→CC 이미지: photo 메시지(캡션 optional). 다운로드 → inbox 저장 → 경로 주입.
+            # text 빈 메시지라도 photo 있으면 여기서 처리 후 continue 흐름.
+            if m.get("photo") and not handled:
+                try:
+                    _handle_photo(m, str(chat), upd.get("update_id"))
+                except Exception as e:
+                    log.exception("photo handling failed: %s", e)
+                board.refresh_if_changed(pending_num=_pending_num(), sticky_num=_sticky_num())
+                continue
             # 답장(reply_to) 라우팅: 봇 메시지에 "답장" = 명시적 타겟(2+ 터미널).
             # reply_hook 가 송신 시 {message_id: 터미널번호} 매핑 저장 → 인입 update 의
             # reply_to_message.message_id 로 역추적. 매핑 미적중(만료/타겟이 안 닿는

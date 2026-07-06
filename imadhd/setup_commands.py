@@ -32,6 +32,8 @@ def build_commands(max_slots: int = 6) -> list[dict]:
     cmds.append({"command": "stop", "description": "N번 작업 중단(ESC)  예: /stop 1"})
     cmds.append({"command": "use", "description": "N번 터미널 고정(본문 자동 주입)  예: /use 3 · /use off"})
     cmds.append({"command": "doctor", "description": "진단(라우터·훅·pm2·봇 메뉴)"})
+    cmds.append({"command": "update", "description": "활성 CC에 !claude update 주입"})
+    cmds.append({"command": "update_adhd", "description": "ImADHD 갱신(git pull+pytest+restart)  /update-adhd 와 동일"})
     cmds.append({"command": "help", "description": "명령 도움말"})
     cmds.append({"command": "pin", "description": "상태 보드 핀 새로고침"})
     return cmds

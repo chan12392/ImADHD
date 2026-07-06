@@ -383,6 +383,10 @@ HOOK_DEFS = [
     ("SessionStart", "imadhd.hooks.register_hook", 15000, None),
     ("Stop", "imadhd.hooks.reply_hook", 15000, None),
     ("PreToolUse", "imadhd.hooks.ask_hook", 300000, "AskUserQuestion"),
+    # 위험 도구(rm/git push/kill/...) → 텔레그램 Yes/No 승인. 동일 matcher 의
+    # recall_hook(lessonloop)은 additionalContext 만 주입하고 permissionDecision
+    # 을 emit 안 함 → 이 훅의 allow/deny 가 충돌 없이 그대로 적용(bypass 모드 포함).
+    ("PreToolUse", "imadhd.hooks.perm_hook", 300000, "Bash|Write|Edit"),
     ("UserPromptSubmit", "imadhd.hooks.busy_hook", 10000, None),
 ]
 

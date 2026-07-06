@@ -1,11 +1,14 @@
-"""/open 명령: 클로드 터미널 1개 새로 생성 (WT 신규 창 + claude).
+"""/open 명령: 클로드 터미널 1개 새로 생성 (WT 신규 탭 + claude 직접 실행).
 
-`wt -w new new-tab --title Claude cmd /c "cd <repo> && py -m imadhd.host -- claude"`
-를 detached 로 spawn. host.py 가 ConPTY 위에서 claude 를 spawn 하고
-세션별 named-pipe 서버(\\.\pipe\imadhd-slot-<N>)를 띄운다 → 라우터가
-포커스 강제 전환 없이 텔레그램 입력을 주입할 수 있다.
-SessionStart 훅(btg-register)이 새 CC 세션을 잡아 자동 번호 할당 →
-"✅ N번 연결됨" 알림이 이어서 옴(무음).
+`wt -w new new-tab --title Claude cmd /c "cd <repo> && claude"` 를 detached
+로 spawn. claude 는 WT 탭의 직자식 → 창클래스 CASCADIA → 라우터의
+sendkeys_win(paste) 주입이 정상 도달(백호/whale 직접 CC 와 동일 경로, 실측).
+
+과거(2026-07-06 일시적) host.py PTY-bridge + named-pipe 경로는 제거:
+파이프 서버 데몬스레드가 조용히 죽어 파이프 소실(slot 3: 6회 /open, 0회 연결,
+에러로그 0건) → pipe 폴백 sendkeys 가 PseudoConsoleWindow 클래스에 도달 못 해
+주입 유실. 직접 claude 실행이 3 버그(주입 유실 / cmd-as-slot / close 잔존) 해결.
+SessionStart 훅(btg-register)이 새 CC 세션을 잡아 자동 번호 할당.
 
 claude = npm 글로벌(claude.cmd) → cmd /c 로 실행(.cmd 셸 필요).
 
@@ -157,14 +160,20 @@ class OpenCommand(Command):
         if os.name == "nt":
             env = build_open_env(os.environ, use_glm)
             claude_cmd = ["claude"] if not model else ["claude", "--model", model]
-            # host.py PTY-bridge 래핑 복원(2026-07-06). host 가 bin/claude.exe 를
-            # PTY 직자식으로 spawn(npm shim 의 cmd.exe/sh 우회 → 고아화 원천 차단)
-            # → named-pipe 서버(\\.\pipe\imadhd-slot-N) 상주 → transport=pipe_win 이
-            # 포커스 강제 전환 없이 텔레그램 입력 주입. IMADHD_WANT_SLOT 으로
-            # register_hook 이 동일 slot 강제 claim(host-자식 slot 정렬).
-            # host 인자: [--] 뒤 child args 를 그대로 claude 에 전달.
-            inner_parts = [f'cd /d "{_REPO_ROOT}" && py -m imadhd.host --'] + claude_cmd
-            inner = " ".join(inner_parts)
+            # claude 를 WT 탭에 직접 실행(2026-07-06 host.py 경로 제거).
+            # 이유: host.py PTY-bridge 의 named-pipe 서버(데몬스레드)가 조용히
+            # 죽는 회귀 — slot 3 에서 6회 /open 시도 중 0회 연결, 에러 로그 0건인데
+            # 파이프가 소실됨(스레드 사망 추정). 파이프 죽으면 pipe_win → sendkeys
+            # 폴백이나, sendkeys 는 host.py ConPTY 창클래스(PseudoConsoleWindow)에
+            # 도달 못 함 → 주입 유실. 백호(StreamDeck)/whale 직접 CC 는 claude 를
+            # WT 탭에 직접 띄워 CASCADIA 클래스 → sendkeys paste 로 정상 작동(실측).
+            # /open 도 동일 경로 → host.py 제거하면 3 버그 동시 해결:
+            #   #2 주입: CASCADIA → paste 도달. #1 cmd-as-slot: 중간 프로세스 제거.
+            #   #3 /close: taskkill /T 가 cc_pid 트리(직부모 cmd 포함) 정상 종료.
+            # 트레이드오프: 포커스 강제 전환(sendkeys) — 백호와 동일, 이미 실사용 중.
+            # cmd /c "cd && claude" → claude.CMD shim → claude.exe 동기 exec → 종료 시
+            # cmd 종료 → WT 탭 closeOnExit.
+            inner = f'cd /d "{_REPO_ROOT}" && ' + " ".join(claude_cmd)
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
