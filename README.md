@@ -160,8 +160,7 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 | `3️⃣ <text>` / `3 <text>` | send `<text>` to terminal #3 (also sets it as pending target) |
 | `/list` | show active terminals + slot status |
 | `/new <N>` | reset terminal #N (`/clear`) for a fresh conversation — e.g. `/new 1` |
-| `/open` | open a new terminal (Windows: new WT window; Linux: new tmux session) |
-| `/open <model>` | open a new terminal running a specific model (e.g. `/open glm`, `/open opus`) |
+| `/open` | open a new terminal in the user's home directory (Windows: new WT window; Linux: new tmux session). Home-based so CC recognizes its existing project & resume sessions. |
 | `/close <N>` | close terminal #N — e.g. `/close 1` |
 | `/stop <N>` | send ESC to terminal #N to abort the current task |
 | `/pin` | refresh the pinned status board |

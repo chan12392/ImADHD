@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, resolve_active_slot
 from ..core import sticky as sticky_store
 
 
@@ -50,11 +50,14 @@ class UseCommand(Command):
             ctx.telegram.send(msg.chat_id, f"❌ 1~{max_slots}번만 가능")
             return
 
-        info = ctx.registry.get(num)
-        if not info or not ctx.transport.is_alive(info.to_dict()):
-            if info:
-                ctx.registry.release(num)
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음/종료")
+        _, info = resolve_active_slot(
+            msg,
+            ctx,
+            num,
+            missing_message=f"❌ {num}번 터미널 없음/종료",
+            dead_message=f"❌ {num}번 터미널 없음/종료",
+        )
+        if not info:
             return
 
         ctx.sticky[chat] = num

@@ -23,10 +23,10 @@ ask 기록 = data_dir/asks/<ask_id>.json:
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
 from pathlib import Path
+
+from .io_utils import atomic_write_json
 
 
 def asks_dir(data_dir: Path) -> Path:
@@ -51,18 +51,7 @@ def _read(path: Path) -> dict | None:
 
 
 def _write_atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+    atomic_write_json(path, data)
 
 
 def write_record(data_dir: Path, record: dict) -> None:

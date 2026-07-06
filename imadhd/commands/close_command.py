@@ -15,7 +15,7 @@ import os
 import subprocess
 from ctypes import wintypes
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, resolve_active_slot
 
 WM_CLOSE = 0x0010
 # 비Windows(오라클 tmux 등)에서 top-level import 만으로 죽지 않도록 격리.
@@ -40,9 +40,14 @@ class CloseCommand(Command):
             ctx.telegram.send(msg.chat_id, "사용법: /close 1  → 1번 터미널 종료")
             return
         num = int(parts[1])
-        info = ctx.registry.get(num)
+        _, info = resolve_active_slot(
+            msg,
+            ctx,
+            num,
+            missing_message=f"❌ {num}번 터미널 없음",
+            check_alive=False,
+        )
         if not info:
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
             return
 
         if os.name == "nt":

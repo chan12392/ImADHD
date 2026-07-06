@@ -8,7 +8,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import tempfile
 import time
 
 if os.name == "nt":
@@ -20,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from .io_utils import atomic_write_json
 from .numberalloc import lowest_free
 
 
@@ -148,18 +148,7 @@ class JSONFileRegistry(Registry):
             return {}
 
     def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, self.path)
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+        atomic_write_json(self.path, data)
 
     @staticmethod
     def _occupied(data: dict) -> set[int]:

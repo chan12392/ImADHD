@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -39,3 +40,24 @@ class Command(ABC):
 
     @abstractmethod
     def handle(self, msg: Message, ctx: CommandContext) -> None: ...
+
+
+def resolve_active_slot(
+    msg: Message,
+    ctx: CommandContext,
+    number: int,
+    *,
+    missing_message: str | None = None,
+    dead_message: str | None = None,
+    check_alive: bool = True,
+) -> tuple[int | None, Any | None]:
+    """Resolve a slot and optionally reject/release it when the transport is dead."""
+    info = ctx.registry.get(number)
+    if not info:
+        ctx.telegram.send(msg.chat_id, missing_message or f"❌{number}번 터미널 없음")
+        return None, None
+    if check_alive and not ctx.transport.is_alive(info.to_dict()):
+        ctx.registry.release(number)
+        ctx.telegram.send(msg.chat_id, dead_message or f"⚠️{number}번 터미널 종료")
+        return None, None
+    return number, info

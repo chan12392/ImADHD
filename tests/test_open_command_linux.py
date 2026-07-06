@@ -1,4 +1,7 @@
-"""/open 의 Linux(tmux) 분기 단위 테스트. subprocess/시간 mock, 실제 tmux 호출 없음."""
+"""/open 의 Linux(tmux) 분기 단위 테스트 (2026-07-06 단일화).
+
+/open 단일 명령만: 모델/glm 변형 제거. 항상 기본 claude + 홈 cwd.
+"""
 from imadhd.commands.base import CommandContext, Message
 import imadhd.commands.open_command as oc
 
@@ -39,29 +42,22 @@ def test_linux_open_bare_creates_named_tmux_session(monkeypatch):
     assert "chleo-1783300000" in tg.sent[-1]
 
 
-def test_linux_open_model_arg_passed_to_launch_cmd(monkeypatch):
-    captured, _ = _handle_linux(monkeypatch, "/open opus")
-    assert "--model opus" in captured["args"][5]
-
-
-def test_linux_open_glm_sources_anthropic_env_file(monkeypatch):
-    captured, _ = _handle_linux(monkeypatch, "/open glm")
-    # GLM 토큰은 bash export(커맨드라인/ps 노출) 대신 0600 env 파일 source 로 주입.
-    assert "source $HOME/.anthropic.env" in captured["args"][5]
-    assert "export ANTHROPIC_" not in captured["args"][5]
-
-
-def test_linux_open_default_does_not_source_proxy_env(monkeypatch):
+def test_linux_open_uses_home_cwd(monkeypatch):
+    """/open 단일화: cd $HOME 에서 claude 실행."""
     captured, _ = _handle_linux(monkeypatch, "/open")
-    # GLM 아닐 땐 anthropic.env source 안 함 (공식 Anthropic = ~/.claude 자격증명).
+    assert 'cd "$HOME"' in captured["args"][5]
+
+
+def test_linux_open_does_not_source_proxy_env(monkeypatch):
+    """/open 단일화: z.ai 프록시 env 파일 source 안 함(공식 Anthropic)."""
+    captured, _ = _handle_linux(monkeypatch, "/open")
     assert "anthropic.env" not in captured["args"][5]
 
 
-def test_linux_open_rejects_shell_injection_in_model(monkeypatch):
-    captured, tg = _handle_linux(monkeypatch, "/open $(touch /tmp/pwn)")
-    # 모델명 검증 실패 → tmux 실행 안 함
-    assert "args" not in captured
-    assert any("허용되지 않는 문자" in t for t in tg.sent)
+def test_linux_open_no_model_flag(monkeypatch):
+    """/open 단일화: --model 인자 없음."""
+    captured, _ = _handle_linux(monkeypatch, "/open")
+    assert "--model" not in captured["args"][5]
 
 
 def test_linux_open_no_skip_perms_by_default(monkeypatch):
@@ -73,3 +69,10 @@ def test_linux_open_skip_perms_env_opt_in(monkeypatch):
     monkeypatch.setenv("IMADHD_SKIP_PERMS", "1")
     captured, _ = _handle_linux(monkeypatch, "/open")
     assert "--dangerously-skip-permissions" in captured["args"][5]
+
+
+def test_linux_open_variants_do_not_match():
+    """/open 단일만. 변형은 match() 에서 미매치(router 가 실행 안 함)."""
+    c = oc.OpenCommand()
+    for txt in ["/open opus", "/open glm", "/open $(touch /tmp/pwn)", "/open 1"]:
+        assert not c.match(Message("1", txt, {})), f"{txt} 는 매치되면 안 됨"
