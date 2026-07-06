@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.4 — 2026-07-07
+- **Intermittent inject fix (#38)** — `host.py` `_write_record` now writes the body as **8-char chunks with 15 ms sleep between** (human-typing cadence) before the standalone submit `\r`. Previous single bulk write tripped CC TUI bracketed-paste detection on mid-length bodies → trailing `\r` became a newline → text stuck in the input box ("가끔 주입 안됨"). Chunked write defeats paste detection. Verified live on respawned CC (1번 백호). Cost: ~200 ms per 100 chars.
+
 ## 0.3.3 — 2026-07-07
 - **`/close` closes the WT tab (#42)** — `find_tab_root` (proc_win: walks the CC parent chain to the `WindowsTerminal.exe` direct child = tab-root `cmd.exe`) → `terminate_tree` kills the whole tab tree. Verified live: tab closes. Requires WT `closeOnExit: "always"` (default `"graceful"` treats `taskkill /F` as abnormal and keeps the tab).
 - **Image+text inject (#39)** — `host.py` `_write_record` now writes the body and the submit `\r` as **separate PTY writes** with a sleep between, defeating CC TUI bracketed-paste detection (long bodies made the trailing `\r` a newline, leaving text in the input box). Verified live: image+caption injects.

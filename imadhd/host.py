@@ -339,17 +339,21 @@ def _make_pipe_instance(host_pid: int):
 
 
 def _write_record(pty, payload: bytes) -> None:
-    """payload(UTF-8 bytes, '\\n' 미포함) → PTY 에 쓰고 엔터(\\r)로 제출.
+    """payload(UTF-8 bytes, '\\n' 미포함) → PTY 청크 분할 write + 엔터(\\r) 제출.
 
-    2026-07-07 fix: 긴 본문(이미지 경로+캡션 등) 주입 시 CC TUI 가 연속 입력을
-    bracketed-paste 로 감지 → 끝 \\r 이 줄바꿈(제출 아님) 처리되는 현상 방지.
-    text 와 \\r 분리 전송 + 사이 미세 sleep → \\r 이 paste 종료 후 단독 키로 도달
-    = 제출(Enter) 로 인식. #38 shift+enter / #39 이미지 주입 동일 근본.
-    단문은 영향 없음(sleep 0.08s 무시 가능). 부작용 = 주입 80ms 지연."""
+    2026-07-07 v2: 통째 write 시 긴 본문이 CC TUI 의 paste 감지(빠른 연속 바이트)
+    에 걸려 끝 \\r 이 줄바꿈(제출 아님) 처리 = "입력창에만 남음" 간헐 실패(#38).
+    → 본문을 8자 청크로 분할 + 청크간 15ms sleep = 사람 타이핑 흉내로 paste
+    감지 회피. 마지막에 단독 \\r(submit). 단문(8자 이하)=청크 1개=거의 무해.
+    부작용 = 본문 길이에 비례한 주입 지연(100자≈200ms).
+    v1(통째 write+sleep 0.08) 은 중간 길이에서 간헐 잔존 → v2 청크 분할."""
     try:
         text = payload.decode("utf-8", "replace")
         if pty.isalive():
-            pty.write(text)
+            _CHUNK = 8
+            for i in range(0, len(text), _CHUNK):
+                pty.write(text[i:i + _CHUNK])
+                time.sleep(0.015)
             time.sleep(0.08)
             pty.write("\r")
     except Exception:
