@@ -98,3 +98,72 @@ def test_download_file_missing_file_path_raises(monkeypatch, tmp_path):
     tg._api = lambda method, data=None, timeout=30: {"result": {}}
     with pytest.raises(RuntimeError):
         tg.download_file("fid", tmp_path / "x.jpg")
+
+
+# ---------- send_photo (CC→TG multipart) ----------
+
+def test_send_photo_builds_multipart_and_returns_message_id(monkeypatch):
+    """CC→TG: sendPhoto multipart. body 에 boundary + chat_id + caption + 파일 데이터."""
+    import imadhd.telegram_api.client as cli_mod
+    captured = {}
+    tg = TelegramClient(token="T", offset_path="/tmp/off.txt", allowed_chat_id="42")
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"result":{"message_id":77}}'
+
+    def fake_urlopen(req, timeout=60):
+        captured["url"] = req.full_url
+        captured["body"] = req.data
+        captured["ct"] = req.get_header("Content-type")
+        return FakeResp()
+
+    monkeypatch.setattr(cli_mod.urllib.request, "urlopen", fake_urlopen)
+
+    mid = tg.send_photo("42", b"PNGBYTES", filename="image.png", caption="img")
+    assert mid == 77
+    assert "/sendPhoto" in captured["url"]
+    body = captured["body"]
+    assert b'name="chat_id"' in body
+    assert b"42" in body
+    assert b'name="caption"' in body
+    assert b"img" in body
+    assert b'name="photo"; filename="image.png"' in body
+    assert b"PNGBYTES" in body
+    assert captured["ct"].startswith("multipart/form-data; boundary=")
+
+
+def test_send_photo_returns_none_for_empty_chat_or_data():
+    tg = TelegramClient("T", "/tmp/x.txt", "1")
+    assert tg.send_photo("", b"data") is None
+    assert tg.send_photo("1", b"") is None
+
+
+def test_send_photo_truncates_long_caption(monkeypatch):
+    """caption 1000자 초과 절단(4096 한도 400 방지)."""
+    import imadhd.telegram_api.client as cli_mod
+    captured = {}
+    tg = TelegramClient(token="T", offset_path="/tmp/off.txt", allowed_chat_id="1")
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"result":{"message_id":1}}'
+
+    monkeypatch.setattr(cli_mod.urllib.request, "urlopen",
+                        lambda req, timeout=60: (captured.__setitem__("body", req.data), FakeResp())[1])
+    tg.send_photo("1", b"data", caption="K" * 1500)
+    # 절단되어 1000 자만(본문에 K 1500개 연속은 없어야)
+    assert b"K" * 1001 not in captured["body"]
+    assert b"K" * 1000 in captured["body"]

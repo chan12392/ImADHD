@@ -61,6 +61,51 @@ def _extract_text(content) -> str:
     return ""
 
 
+def _extract_images(content) -> list:
+    """CC assistant content 의 image 블록 → [{data, media_type, ext}].
+
+    Anthropic SDK image 블록 구조(실측 2026-07-06):
+      {"type":"image","source":{"type":"base64","media_type":"image/png",
+                                 "data":"<base64>"}}
+    base64 만 처리(URL source 는 미구현 스킵 — CC 생성 이미지는 base64).
+    디코딩 실패/빈 데이터 → 스킵.
+    """
+    import base64 as _b64
+    out: list[dict] = []
+    if not isinstance(content, list):
+        return out
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "image":
+            continue
+        src = b.get("source") or {}
+        if src.get("type") != "base64":
+            continue
+        try:
+            raw = _b64.b64decode(src.get("data", "") or "")
+        except Exception:
+            continue
+        if not raw:
+            continue
+        mt = src.get("media_type", "image/png") or "image/png"
+        ext = "jpg" if ("jpeg" in mt or "jpg" in mt) else "png"
+        out.append({"data": raw, "media_type": mt, "ext": ext})
+    return out
+
+
+def _last_assistant_images(entries: list) -> list:
+    """마지막 assistant entry 의 image 블록들 추출(CC→TG 이미지 회신).
+
+    _last_assistant_text 와 동일 entry 에서 뽑는다(text+image 가 같은
+    assistant 메시지에 공존 가능). assistant entry 가 여러 개면 가장 마지막 것."""
+    for entry in reversed(entries):
+        if _get_role(entry) != "assistant":
+            continue
+        imgs = _extract_images(_get_content(entry))
+        if imgs:
+            return imgs
+    return []
+
+
 def _is_external_user_message(entry: dict) -> bool:
     """tool_result 만 있는 user round(API 왕복)는 실제 사용자 발화가 아니므로 제외."""
     if _get_role(entry) != "user":
@@ -265,17 +310,19 @@ def main() -> int:
     pending_flag = has_marker_pending(s.data_dir, session_id)
     is_marker_turn = (s.reply_marker in user_text) or pending_flag
     too_long = reply_too_long(text)
+    images = _last_assistant_images(entries)
     _debug_log(
         f"[reply] session={session_id[:8]} text_len={len(text)} "
         f"too_long={too_long} is_marker_turn={is_marker_turn} "
-        f"pending={pending_flag} stop_hook_active={stop_hook_active}"
+        f"pending={pending_flag} stop_hook_active={stop_hook_active} "
+        f"images={len(images)}"
     )
     # 직접 타이핑 턴 — 회신도 block 도 안 함(idle 복귀는 위에서 마커 무관 처리).
     if not is_marker_turn:
         _debug_log(f"[reply] direct-typing turn, suppress reply+block session={session_id[:8]}")
         return 0
-    if not text:
-        _debug_log(f"[reply] marker turn but no assistant text session={session_id[:8]}")
+    if not text and not images:
+        _debug_log(f"[reply] marker turn but no assistant text/image session={session_id[:8]}")
         clear_marker_pending(s.data_dir, session_id)
         return 0
     # 길이 게이트: HARD 초과 + 재시도 아님 → 1회 "짧게 다시" block.
@@ -304,28 +351,47 @@ def main() -> int:
     # 미지원 → 400 → plain 폴백 되는 문제 해결. HTML 모드 + md_to_tg_html 변환.
     # 변환/전송 실패 시 plain 폴백.
     sent_ids: list[int] = []
-    try:
-        sent_ids = tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
-        _debug_log(f"[reply] sent HTML ok session={session_id[:8]} chunks={len(sent_ids)}")
-    except Exception as e1:
-        # plain 폴백도 실패하면(4096자 초과 외 사유) 여기서 죽지 않고 조용히 포기.
-        # 이 예외를 못 잡으면 Stop 훅 자체가 죽어 idle 복귀는 됐어도 회신이
-        # 통째로 유실된다(2026-07-04 발견).
+    if msg.strip():
         try:
-            sent_ids = tg.send(s.allowed_chat_id, msg)
-            _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} chunks={len(sent_ids)} (html err={e1!r})")
-        except Exception as e2:
-            sent_ids = []
-            _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={e1!r} plain_err={e2!r}")
+            sent_ids = tg.send(s.allowed_chat_id, md_to_tg_html(msg), parse_mode="HTML")
+            _debug_log(f"[reply] sent HTML ok session={session_id[:8]} chunks={len(sent_ids)}")
+        except Exception as e1:
+            # plain 폴백도 실패하면(4096자 초과 외 사유) 여기서 죽지 않고 조용히 포기.
+            # 이 예외를 못 잡으면 Stop 훅 자체가 죽어 idle 복귀는 됐어도 회신이
+            # 통째로 유실된다(2026-07-04 발견).
+            try:
+                sent_ids = tg.send(s.allowed_chat_id, msg)
+                _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} chunks={len(sent_ids)} (html err={e1!r})")
+            except Exception as e2:
+                sent_ids = []
+                _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={e1!r} plain_err={e2!r}")
+
+    # CC→TG 이미지 회신: 마지막 assistant 메시지의 image 블록(base64)을
+    # 디코딩해 sendPhoto 로 각각 전송. caption=번호(라우팅 식별용). text 회신과
+    # 별도 메시지. 실패해도 text 회신은 이미 갔으므로 조용히 로깅만.
+    image_ids: list[int] = []
+    for img in images:
+        try:
+            mid = tg.send_photo(
+                s.allowed_chat_id, img["data"], f"image.{img['ext']}",
+                caption=(emoji or None),
+            )
+            if mid:
+                image_ids.append(mid)
+            _debug_log(
+                f"[reply] send_photo ok session={session_id[:8]} ext={img['ext']} "
+                f"bytes={len(img['data'])}"
+            )
+        except Exception as e:
+            _debug_log(f"[reply] send_photo failed session={session_id[:8]} err={e!r}")
     # 답장 라우팅 매핑: 봇 송신 message_id → 이 세션 터미널번호.
     # 대표님이 이 메시지에 "답장"하면 router 가 reply_to_message.message_id 로
     # 이 번호를 찾아 해당 터미널로 주입(2+ 터미널 명시적 라우팅).
-    # 긴 회신은 청크 분할 → send() 가 모든 청크 id 반환 → 각각 매핑.
-    # 어떤 청크에 답장해도 라우팅 적중(2026-07-06).
-    if sent_ids and info:
+    # text 청크 + image 메시지 모두 같은 slot 매핑 → 어느 쪽에 답장해도 라우팅 적중.
+    if (sent_ids or image_ids) and info:
         try:
             from ..core.reply_map import store as store_reply_map
-            for mid in sent_ids:
+            for mid in sent_ids + image_ids:
                 store_reply_map(s.data_dir, mid, info.number)
         except Exception as e:
             _debug_log(f"[reply] reply_map store failed session={session_id[:8]} err={e!r}")
