@@ -57,7 +57,10 @@ def watchdog_main() -> int:
             continue
         _debug_log(f"[watchdog] heartbeat stale age={age:.1f}s → pm2 restart imadhd")
         try:
-            subprocess.run(["pm2", "restart", "imadhd"], check=False,
+            # Windows 에서 npm global pm2 = pm2.CMD shim. shell=False 리스트 호출은
+            # PATH 의 .CMD 를 못 찾아 FileNotFoundError → restart 무력(2026-07-06 실측).
+            # 인자 고정이라 shell=True 문자열로 안전. boot_check 와 동일 패턴.
+            subprocess.run("pm2 restart imadhd", shell=True, check=False,
                             capture_output=True, timeout=30)
         except Exception as e:
             _debug_log(f"[watchdog] pm2 restart failed: {e!r}")
