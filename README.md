@@ -28,7 +28,7 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.3.0` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.2` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
 
 ## How it works
 ```
@@ -71,7 +71,8 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 | `boards/` | status board (pinned text + ReplyKeyboard) |
 | `hooks/register_hook.py` | CC `SessionStart`: claim a number |
 | `hooks/reply_hook.py` | CC `Stop`: capture + send reply |
-| `hooks/ask_hook.py` | CC `PreToolUse`: route `AskUserQuestion` to Telegram **inline buttons** |
+| `hooks/ask_hook.py` | CC `PreToolUse` (`AskUserQuestion`): route clarifying questions to Telegram **inline buttons** |
+| `hooks/perm_hook.py` | CC `PreToolUse` (`Bash\|Write\|Edit`): route **risky tool calls** (rm / `git push` / kill / sudo / ...) to Telegram **Yes/No** — safe tools auto-allow with zero latency; timeout → deny |
 | `hooks/busy_hook.py` | CC `UserPromptSubmit`: mark slot busy |
 
 ## Install
@@ -165,11 +166,17 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 | `/stop <N>` | send ESC to terminal #N to abort the current task |
 | `/pin` | refresh the pinned status board |
 | `/help` | command help |
+| `/update-adhd` | self-update ImADHD — `git pull` → `pytest` → `pm2 restart` (refuses restart on test failure) |
+| `/update` | inject `!claude update` into the active CC slot (Claude Code version bump from your phone) |
 
 ### Status board (pinned)
 The pinned message shows every slot: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. The `ReplyKeyboard` mirrors the slot numbers so you can tap instead of type. It auto-refreshes as slots change state.
 
 > **Single-terminal shortcut:** if only one slot is active, you can skip the number — a bare message is injected into that terminal automatically.
+
+### Images (bidirectional)
+- **CC → Telegram**: when Claude Code's reply carries an image (a generated PNG, a screenshot it produced), it is sent to your phone as a photo via `sendPhoto` — hand-rolled `multipart/form-data` (no `requests`), right alongside the text reply. Multiple images in one reply are each sent as their own message.
+- **Telegram → CC**: send a photo to the bot and the largest size is downloaded to `~/.imadhd/inbox/tg_<file_id>.jpg` (atomic write); the active CC slot receives `이미지 수신: <path>` and can `Read` the file at that path to analyze it.
 
 ## Configure
 
@@ -204,12 +211,16 @@ Add to `~/.claude/settings.json`:
     "Stop":              [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.reply_hook"    }] }],
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.busy_hook"     }] }],
     "PreToolUse":        [{ "matcher": "AskUserQuestion",
-                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.ask_hook", "timeout": 300000 }] }]
+                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.ask_hook", "timeout": 300000 }] },
+                          { "matcher": "Bash|Write|Edit",
+                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.perm_hook", "timeout": 300000 }] }]
   }
 }
 ```
 
 The **`PreToolUse` / `AskUserQuestion`** hook makes Claude Code's clarifying questions arrive as **Telegram inline buttons** instead of stalling in the terminal. Tap an option → the answer is fed back to Claude Code and work continues — no phone-to-terminal round-trip. If no answer arrives within the timeout, the question is denied (Claude Code can re-ask). The hook is a no-op fallback (native prompt shown) when `TELEGRAM_ALLOWED_CHAT_ID` isn't configured.
+
+The **`PreToolUse` / `Bash|Write|Edit`** hook (`perm_hook`) routes **risky tool calls** — `rm`, `git push`, `kill`, `sudo`, `drop`, writes to protected dirs, etc. — to a Telegram **Yes/No** before Claude Code runs them. Safe tools (`ls`, `cat`, edits outside protected paths) are auto-allowed with zero added latency. The hook's `permissionDecision: deny` is honored **even under `bypassPermissions`** mode — the hook fires before the permission-mode check, so this is your last-line gate from your phone. Timeout → deny (fail-closed). Terminal-direct turns (no Telegram marker) are skipped so local work is never gated.
 
 > **No `CLAUDE.md` rule needed.** Replies are routed by a **pending flag** set at inject time, not by a trailing marker Claude Code has to print. Claude Code stays fully unaware that a turn came from Telegram — no prompt suffix, no marker echo, no behavioral rule to forget.
 
