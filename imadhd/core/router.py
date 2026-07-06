@@ -105,12 +105,13 @@ def run(settings: "Settings") -> None:
     from ..commands.open_command import OpenCommand
     from ..commands.close_command import CloseCommand
     from ..commands.stop_command import StopCommand
+    from ..commands.label_command import LabelCommand
     from ..commands.help_command import HelpCommand
     from ..commands.update_adhd_command import UpdateAdhdCommand
-    from ..commands.update_cc_command import UpdateCcCommand
     from ..commands.use_command import UseCommand
     from ..commands.doctor_command import DoctorCommand
     from ..core import sticky as sticky_store
+    from ..core import slot_picker
     from ..boards.pin_board import PinBoard
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -124,8 +125,8 @@ def run(settings: "Settings") -> None:
     commands = [
         PinCommand(board), ListCommand(), NewCommand(),
         OpenCommand(), CloseCommand(), StopCommand(),
-        UseCommand(), DoctorCommand(), HelpCommand(),
-        UpdateAdhdCommand(), UpdateCcCommand(), InjectCommand(),
+        UseCommand(), LabelCommand(), DoctorCommand(), HelpCommand(),
+        UpdateAdhdCommand(), InjectCommand(),
     ]
     ctx = CommandContext(settings=settings, registry=reg, transport=transport, telegram=tg)
     # 고정 타겟(sticky) 영속 파일 로드 — /use N 으로 설정한 chat→slot 복원.
@@ -155,6 +156,67 @@ def run(settings: "Settings") -> None:
                 tg.answer_callback(cq, "⚠️ 허용되지 않은 채팅")
             except Exception:
                 pass
+            return
+        # s: = slot 선택 팝업(/close /stop /use /new 인자 없음 → 인라인 번호 선택).
+        if cbdata.startswith("s:"):
+            parsed = slot_picker.parse_callback(cbdata)
+            if not parsed:
+                try: tg.answer_callback(cq, "⚠️ 알 수 없는 버튼")
+                except Exception: pass
+                return
+            action, num = parsed
+            # 가상 Message("/close 3") → 해당 Command.handle 재진입.
+            # parts[1] 있으므로 정상 경로(send_picker 우회), 순환 아님.
+            # num=0(use 해제 버튼) → /use 0 → use_command 해제 분기.
+            from ..commands.base import Message
+            _, trigger = slot_picker.ACTIONS[action]
+            fake = Message(chat_id=str(chat), text=f"/{trigger} {num}", raw={})
+            try:
+                for cmd in commands:
+                    if cmd.match(fake):
+                        cmd.handle(fake, ctx); break
+                done_label = "고정 해제" if (action == "use" and num == 0) else f"{action} {num}"
+                tg.answer_callback(cq, f"✅ {done_label}")
+                board.refresh_if_changed(pending_num=_pending_num())
+            except Exception as e:
+                log.exception("slot callback %s failed: %s", action, e)
+                try: tg.answer_callback(cq, "⚠️ 처리 실패")
+                except Exception: pass
+            # 팝업 메시지 버튼 제거(빈 inline_keyboard).
+            try:
+                tg.edit_message_reply_markup(str(chat), cmsg.get("message_id"),
+                                             {"inline_keyboard": []})
+            except Exception:
+                pass
+            return
+        # u: = update-adhd 인라인 Yes/No(대표님 2026-07-07). handle() 가 버전표시+
+        # 체인지로그+yes/no 팝업 송신 → 콜백 yes → run_update() 분리(pull→pytest→restart).
+        if cbdata.startswith("u:"):
+            parts = cbdata.split(":")
+            # 형식 u:update:yes|no. 불일치 → 토스트만.
+            if (len(parts) != 3 or parts[1] != "update"
+                    or parts[2] not in ("yes", "no")):
+                try: tg.answer_callback(cq, "⚠️ 알 수 없는 버튼")
+                except Exception: pass
+                return
+            choice = parts[2]
+            # 팝업 버튼 즉시 제거(중복 탭 방지).
+            try:
+                tg.edit_message_reply_markup(str(chat), cmsg.get("message_id"),
+                                             {"inline_keyboard": []})
+            except Exception:
+                pass
+            if choice == "no":
+                tg.answer_callback(cq, "🚫 취소")
+                tg.send(str(chat), "🚫 업데이트 취소함")
+                return
+            tg.answer_callback(cq, "🔄 시작")
+            from ..commands.update_adhd_command import run_update
+            try:
+                run_update(tg, str(chat))
+            except Exception as e:
+                log.exception("update-adhd callback failed: %s", e)
+                tg.send(str(chat), f"⚠️ 업데이트 처리 실패: {e}")
             return
         # p: = 위험도구 승인(perm_hook PreToolUse). a: = AskUserQuestion(ask_hook).
         if cbdata.startswith("p:"):
@@ -390,6 +452,8 @@ def run(settings: "Settings") -> None:
             if not settings.allow_any_chat and str(chat) != str(settings.allowed_chat_id or ""):
                 continue
             msg = Message(chat_id=str(chat), text=text, raw=upd)
+            log.info("upd rcvd uid=%s chat=%s allowed=%s text=%r", upd.get('update_id'), chat,
+                     str(chat) == str(settings.allowed_chat_id or ""), text)
             handled = False
             # TG→CC 이미지: photo 메시지(캡션 optional). 다운로드 → inbox 저장 → 경로 주입.
             # text 빈 메시지라도 photo 있으면 여기서 처리 후 continue 흐름.
@@ -416,8 +480,21 @@ def run(settings: "Settings") -> None:
                             handled = True
                         except Exception as e:
                             log.exception("reply-to inject failed: %s", e)
+            # ★ 명령(slash) 최우선: "📋 list" "📌 pin" 등 이모지+영문 버튼 텍스트도
+            # normalize → match 로 잡음. sticky/pending/auto 가드가 text.startswith("/")
+            # 로만 걸러서 이모지 lead 슬래시 명령이 본문 주입으로 빠져 create 가 안
+            # 돌던 버그 수정 (2026-07-07).
+            if text and not handled:
+                for cmd in commands:
+                    if cmd.match(msg):
+                        try:
+                            cmd.handle(msg, ctx)
+                        except Exception as e:
+                            log.exception("command %s failed: %s", type(cmd).__name__, e)
+                        handled = True
+                        break
             # 고정 타겟(sticky): 번호 없고 슬래시 아닌 본문 → 고정 슬롯으로 주입.
-            # 우선순위: 명시번호(InjectCommand) > reply_to > sticky > pending > auto.
+            # 우선순위: 명시번호(InjectCommand) > reply_to > 명령 > sticky > pending > auto.
             # 슬롯 사망 시 자동 해제(sweep 도 매 틱 정리하지만 즉시 반영).
             if text and not handled and parse_leading_number(text) is None and not text.startswith("/"):
                 stick = ctx.sticky.get(str(chat))

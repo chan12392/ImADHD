@@ -30,6 +30,9 @@ class FakeRegistry:
     def release(self, n):
         self.released.append(n)
 
+    def active(self):
+        return list(self._infos.values())
+
 
 class FakeTransport:
     def __init__(self, alive=True):
@@ -113,12 +116,13 @@ def test_use_rejects_out_of_range(tmp_path):
     assert any("❌" in t for t in ctx.telegram.sent)
 
 
-def test_use_no_arg_shows_usage(tmp_path):
-    ctx = _ctx(tmp_path)
+def test_use_no_arg_no_active_informs(tmp_path):
+    """인자 없음 + 활성 0 → slot_picker 가 '열린 터미널 없음' 안내."""
+    ctx = _ctx(tmp_path, alive_nums=())
     cmd = UseCommand()
     cmd.handle(Message("1", "/use", {}), ctx)
     assert ctx.sticky == {}
-    assert any("사용법" in t for t in ctx.telegram.sent)
+    assert any("열린" in t for t in ctx.telegram.sent)
 
 
 # ---------- /use off 해제 ----------

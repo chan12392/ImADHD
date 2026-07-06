@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import subprocess
 from ctypes import wintypes
 from pathlib import Path
 
@@ -182,6 +183,62 @@ def exists(pid: int) -> bool:
 def name_of(pid: int) -> str:
     """pid 의 exe 이름(소문자, .exe 포함). 없으면 ''."""
     return snapshot().get(int(pid), ("", 0))[0]
+
+
+def find_tab_root(start_pid: int) -> int | None:
+    """start_pid(CC) 부모체인 역추적 → WindowsTerminal.exe 직전 자식(탭 루트) pid.
+
+    WT 탭 구조: WindowsTerminal.exe → 탭루트(cmd/powershell/sh) → ... → claude.exe.
+    탭 루트를 terminate_tree(taskkill /T) 하면 탭 전체 프로세스 트리 연쇄 종료 →
+    WT 가 루트 종료 감지하여 탭 닫음(closeOnExit 무관 — 루트 프로세스 없으면 탭 종료).
+
+    2026-07-07: host_pid 만 kill 시 WT 탭(부모 shell=cmd.exe) 잔존 → 빈 탭 되는
+    현상(대표님 /close 보고) 해결. host.py 가 살아있든 제거됐든, CC 부모체인의
+    WT 직전 자식이 곧 탭 루트 → 그것을 kill 해야 탭 전체 정리.
+
+    안전: 체인에서 windowsterminal.exe 를 만난 경우만 last(직전 자식) 반환.
+    WT 를 못 찾으면(비WT/tmux/직접실행) None → 호출측(c close_command) 기존
+    host_pid/pid 폴백. 엉뚱한 큰 pid kill 방지.
+    """
+    if not start_pid or not _IS_WINDOWS:
+        return None
+    try:
+        snap = snapshot()
+        pid = int(start_pid)
+        seen: set[int] = set()
+        last = None
+        found_wt = False
+        while pid and pid not in seen:
+            seen.add(pid)
+            exe, ppid = snap.get(pid, ("", 0))
+            if exe == "windowsterminal.exe":
+                found_wt = True
+                break
+            last = pid
+            pid = ppid
+        return last if (found_wt and last) else None
+    except Exception:
+        return None
+
+
+def terminate_tree(pid: int) -> bool:
+    """pid + 자식 전체 강제종료(taskkill /T /F). /close 용.
+
+    host_pid(PTY-bridge) kill 시 자식 CC(claude.exe) 연쇄 종료 → WT 가 빈 탭을
+    자동 닫음. WT 는 단일 프로세스가 다중 탭을 보유해 WM_CLOSE 로 특정 탭을
+    못 닫음(전체 창 종료 or ConPTY 무시) → 트리 kill 이 신뢰 방법.
+    반환 True = taskkill returncode 0. 비Windows/pid 0/실패 시 False.
+    """
+    if not pid or not _IS_WINDOWS:
+        return False
+    try:
+        r = subprocess.run(
+            ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+            capture_output=True, timeout=10,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 def console_hwnd(cc_pid: int) -> int:

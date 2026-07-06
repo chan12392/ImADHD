@@ -33,6 +33,7 @@ class FakeTelegram:
 
 
 def test_linux_close_kills_tmux_session(monkeypatch):
+    """/close 는 tmux pane → session name 조회 → kill-session (대표님 2026-07-07)."""
     monkeypatch.setattr(cc.os, "name", "posix")
     calls = []
 
@@ -53,10 +54,11 @@ def test_linux_close_kills_tmux_session(monkeypatch):
     assert calls[0] == ["tmux", "display-message", "-p", "-t", "%7", "#S"]
     assert calls[1] == ["tmux", "kill-session", "-t", "claude-1783300000"]
     assert reg.released == [2]
-    assert "닫음" in tg.sent[-1]
+    assert "종료" in tg.sent[-1]
 
 
-def test_linux_close_no_tmux_pane_skips_kill_but_releases(monkeypatch):
+def test_linux_close_no_tmux_pane_releases_only(monkeypatch):
+    """/close: tmux_pane 없으면 kill 못 하지만 슬롯은 해제 + 실패 안내."""
     monkeypatch.setattr(cc.os, "name", "posix")
     calls = []
     monkeypatch.setattr(cc.subprocess, "run", lambda *a, **k: calls.append(a))
@@ -65,5 +67,6 @@ def test_linux_close_no_tmux_pane_skips_kill_but_releases(monkeypatch):
     ctx = CommandContext(settings=None, registry=reg, transport=None, telegram=tg)
     cc.CloseCommand().handle(Message("1", "/close 3", {}), ctx)
 
-    assert calls == []  # tmux_pane 없으면 tmux 명령 자체를 안 함
+    assert calls == []  # tmux_pane 없으면 tmux 호출 자체 안 함
     assert reg.released == [3]
+    assert "실패" in tg.sent[-1]

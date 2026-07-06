@@ -7,8 +7,8 @@ def test_build_commands_6():
     cmds = build_commands(6)
     assert [c["command"] for c in cmds] == [
         "1", "2", "3", "4", "5", "6",
-        "list", "new", "open", "close", "stop", "use", "doctor",
-        "update", "update_adhd", "help", "pin",
+        "list", "new", "open", "close", "stop", "use", "label", "doctor",
+        "update_adhd", "help", "pin",
     ]
     assert cmds[0]["description"] == "1번 터미널로 메시지 전송"
     assert cmds[-1]["command"] == "pin"
@@ -16,7 +16,7 @@ def test_build_commands_6():
 
 def test_build_commands_respects_max():
     cmds = build_commands(3)
-    # 1~3 + list/new/open/close/stop/use/doctor/update/update-adhd/help/pin(11)
+    # 1~3 + list/new/open/close/stop/use/label/doctor/update-adhd/help/pin(11)
     assert len(cmds) == 14
     assert cmds[2]["command"] == "3"
 

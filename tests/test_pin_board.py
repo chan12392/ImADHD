@@ -61,12 +61,29 @@ def test_create_sends_status_and_keyboard(tmp_path):
     assert mk_k["resize_keyboard"] is True
 
 
-def test_keyboard_markup_numbers_only(tmp_path):
-    """버튼은 번호+'.'(본문 포맷과 시작 일치, 상태마크 없음 → 고정). 클릭=`1️⃣.`."""
+def test_keyboard_markup_func_and_numbers(tmp_path):
+    """기능 버튼 4행(이모지+슬래시 명령) + 번호 키패드(순수 번호 이모지, 점 없음).
+
+    기능 버튼 탭 = "📋 /list" 전체 텍스트 전송 → Command.match() 매칭
+    (normalize_command 가 선행 이모지 strip).
+    번호 버튼 탭 = 순수 "1️⃣" → InjectCommand pending 토글.
+    """
     board, _ = _board(tmp_path)
     kb = board.keyboard_markup()["keyboard"]
-    assert kb[0][0]["text"] == NUM_EMOJI[1] + "."       # 번호 + 점
-    assert "⭕" not in kb[0][0]["text"]
+    flat = [b["text"] for row in kb for b in row]
+    # 기능 버튼 (이모지 + 영문명, 슬래시 없음)
+    assert "📋 list" in flat
+    assert "✖️ close" in flat
+    assert "🎯 use" in flat
+    assert "📌 pin" in flat
+    assert "🔄 update-adhd" in flat
+    # use/pin 위치 (대표님 2026-07-07): Row1=[list,use,new], Row3=[pin,help]
+    labels = [[b["text"] for b in row] for row in kb]
+    assert labels[0] == ["📋 list", "🎯 use", "🆕 new"]
+    assert labels[2] == ["📌 pin", "❓ help"]
+    # 숫자 버튼 제거됨 (2026-07-07) — 기능 버튼만.
+    assert NUM_EMOJI[1] not in flat
+    # ReplyKeyboard(인라인 아님) — callback_data 없음
     assert "callback_data" not in kb[0][0]
 
 
