@@ -1,9 +1,12 @@
-"""perm_hook 단위 테스트 (classify_risk 위험 매칭).
+"""perm_hook 단위 테스트.
 
-main() 은 Settings/Telegram/폴링 의존 → classify_risk 순수 함수만 단위 테스트.
-라이브 프로브(실제 CC 차단)는 대표님 텔레그램 검증 단계.
+위험 분류와 승인 전송 실패 시 fail-closed 동작을 검증한다.
 """
-from imadhd.hooks.perm_hook import classify_risk, DANGEROUS_PATTERNS
+import io
+import json
+
+from imadhd.hooks import perm_hook
+from imadhd.hooks.perm_hook import build_approval_body, classify_risk, DANGEROUS_PATTERNS
 
 
 # ───────────────────────── 안전 명령 (None 반환) ─────────────────────────
@@ -90,3 +93,65 @@ def test_summary_truncates_long_command():
     s = classify_risk("Bash", {"command": long_cmd})
     assert s is not None
     assert len(s) <= 800
+
+
+def test_approval_body_escapes_html_summary():
+    body = build_approval_body("", "Bash", "rm -rf a && echo <token>")
+    assert "<code>" in body
+    assert "&&" not in body
+    assert "<token>" not in body
+    assert "rm -rf a &amp;&amp; echo &lt;token&gt;" in body
+
+
+def test_send_failure_denies_instead_of_fail_open(monkeypatch, tmp_path):
+    """승인 메시지 전송 실패 시 위험 명령을 조용히 통과시키지 않는다."""
+    from imadhd import config
+    from imadhd.core import registry
+    from imadhd.telegram_api import client
+
+    class FakeSettings:
+        bot_token = "token"
+        allowed_chat_id = "42"
+        offset_path = tmp_path / "offset.txt"
+        registry_path = tmp_path / "registry.json"
+        data_dir = tmp_path
+        max_slots = 6
+        reply_marker = "[A.D.H.D]"
+
+    class FakeInfo:
+        number = 3
+
+    class FakeRegistry:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def find_by_session(self, _session_id):
+            return FakeInfo()
+
+    class FailingTelegram:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def send(self, *_args, **_kwargs):
+            raise RuntimeError("telegram html parse failed")
+
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf a && echo <token>"},
+        "session_id": "s1",
+        "transcript_path": str(tmp_path / "t.jsonl"),
+    }
+
+    monkeypatch.setattr(config.Settings, "load", classmethod(lambda cls: FakeSettings()))
+    monkeypatch.setattr(registry, "JSONFileRegistry", FakeRegistry)
+    monkeypatch.setattr(client, "TelegramClient", FailingTelegram)
+    monkeypatch.setattr(perm_hook, "_origin_has_marker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(perm_hook.sys, "stdin", io.StringIO(json.dumps(payload)))
+    stdout = io.StringIO()
+    monkeypatch.setattr(perm_hook.sys, "stdout", stdout)
+
+    assert perm_hook.main() == 0
+    out = json.loads(stdout.getvalue())
+    hook = out["hookSpecificOutput"]
+    assert hook["permissionDecision"] == "deny"
+    assert "전송 실패" in hook["reason"]

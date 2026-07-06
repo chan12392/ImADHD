@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -31,6 +32,11 @@ def _debug_log(line: str) -> None:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def _input_fingerprint(text: str) -> str:
+    digest = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:12]
+    return f"len={len(text)} sha256={digest}"
 
 
 def mark_marker_pending(data_dir, session_id: str) -> None:
@@ -144,7 +150,7 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     result = ctx.transport.inject(info.to_dict(), inject_text)
     _debug_log(
         f"[inject-done] num={num} method={getattr(result, 'method', '?')} "
-        f"delivered={getattr(result, 'delivered', False)} body={inject_text!r}"
+        f"delivered={getattr(result, 'delivered', False)} {_input_fingerprint(inject_text)}"
     )
     # transport 가 InjectResult(진짜) 반환 시에만 복구 처리. 테스트 FakeTransport(None) 방어.
     new_hwnd = getattr(result, "rediscovered_hwnd", None)
