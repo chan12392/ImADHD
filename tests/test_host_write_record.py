@@ -1,7 +1,8 @@
-"""_write_record 단위 테스트: text/\\r 분리 전송 (bracketed-paste 회피).
+"""_write_record 단위 테스트: 본문 청크 분할 write + 단독 \\r 제출.
 
-2026-07-07: 긴 본문 주입 시 CC TUI 가 연속 입력을 paste 로 감지해 끝 \\r 을
-줄바꿈(제출 아님) 처리하는 현상 방지 → text 와 \\r 분리 + 사이 sleep.
+2026-07-07 v2: 통째 write 시 긴 본문이 CC TUI paste 감지에 걸려 끝 \\r 이
+줄바꿈(제출 아님) = "입력창에만 남음" 간헐 실패(#38) → 본문 8자 청크 분할 +
+15ms sleep(사람 타이핑 흉내)로 paste 감지 회피. 마지막 단독 \\r(submit).
 """
 from __future__ import annotations
 
@@ -32,25 +33,26 @@ class _FakePty:
         self.writes.append(s)
 
 
-def test_write_record_splits_text_and_enter(monkeypatch):
-    """text 와 \\r 분리 전송 + 사이 sleep. paste 감지창 탈출."""
+def test_write_record_chunks_text_and_enter(monkeypatch):
+    """본문 8자 청크 분할 + 마지막 단독 \\r."""
     monkeypatch.setattr(host.time, "sleep", lambda s: None)
     pty = _FakePty()
     host._write_record(pty, "이미지 수신: C:\\x\\y.jpg 캡션".encode("utf-8"))
-    # 두 번 write: 본문, 그리고 단독 \r.
-    assert len(pty.writes) == 2
-    assert pty.writes[0].startswith("이미지 수신")
-    assert "\r" not in pty.writes[0]          # 본문에 \r 섞이면 조기 제출 위험
-    assert pty.writes[1] == "\r"
+    assert pty.writes[-1] == "\r"                       # 마지막 = submit
+    body = "".join(pty.writes[:-1])
+    assert body.startswith("이미지 수신")
+    assert "\r" not in body                             # 청크에 \r 섞이면 조기 제출
+    assert all(len(c) <= 8 for c in pty.writes[:-1])    # 청크 한계
+    assert len(pty.writes) >= 3                         # 본문 25자 → 청크 4 + \r
 
 
-def test_write_record_sleep_between_writes(monkeypatch):
-    """text→\\r 사이 sleep 1회 호출(0.08s). paste 종료 대기."""
+def test_write_record_sleeps_between_chunks(monkeypatch):
+    """청크간 0.015 + 본문 후 0.08(\\r 직전)."""
     slept: list[float] = []
     monkeypatch.setattr(host.time, "sleep", lambda s: slept.append(s))
-    host._write_record(_FakePty(), b"hello")
-    assert len(slept) == 1
-    assert slept[0] == pytest.approx(0.08)
+    host._write_record(_FakePty(), b"0123456789abcdef")   # 16자 = 청크 2개
+    assert slept.count(0.015) == 2
+    assert 0.08 in slept
 
 
 def test_write_record_dead_pty_skipped(monkeypatch):
@@ -63,9 +65,17 @@ def test_write_record_dead_pty_skipped(monkeypatch):
 
 
 def test_write_record_invalid_utf8_replaces(monkeypatch):
-    """깨진 바이트 → replace(예외 발생 x, \\r 만 전송되지 않고 안전)."""
+    """깨진 바이트 → replace(예외 x). 마지막은 \\r."""
     monkeypatch.setattr(host.time, "sleep", lambda s: None)
     pty = _FakePty()
     host._write_record(pty, b"\xff\xfe bad")
-    assert len(pty.writes) == 2              # replace 된 text + \r
-    assert pty.writes[1] == "\r"
+    assert pty.writes[-1] == "\r"
+    assert len(pty.writes) >= 2
+
+
+def test_write_record_short_text_single_chunk(monkeypatch):
+    """단문(8자 이하) = 청크 1개 + \\r = 2회 write."""
+    monkeypatch.setattr(host.time, "sleep", lambda s: None)
+    pty = _FakePty()
+    host._write_record(pty, b"hi")
+    assert pty.writes == ["hi", "\r"]

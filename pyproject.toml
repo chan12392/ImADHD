@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imadhd"
-version = "0.3.3"
+version = "0.3.4"
 description = "Control multiple terminal sessions from one Telegram chat. Each terminal gets a number; route DMs by number emoji."
 readme = "README.md"
 license = { text = "MIT" }
