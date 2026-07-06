@@ -10,6 +10,7 @@ import os
 import tempfile
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 # 텔레그램 sendMessage 텍스트 한도(4096) 대비 여유. 초과 시 400 Bad Request로
@@ -64,6 +65,73 @@ class TelegramClient:
                 except OSError:
                     pass
         return dest
+
+    def _build_multipart(self, boundary: str, fields: list, files: list) -> bytes:
+        """multipart/form-data body 수동 인코딩(의존성 0 — urllib 만 사용).
+
+        fields = [(name, value), ...] (value None/빈값 스킵).
+        files  = [(fieldname, filename, content_type, data_bytes), ...].
+        """
+        crlf = b"\r\n"
+        parts: list[bytes] = []
+        for name, val in fields:
+            if val is None or val == "":
+                continue
+            parts.append(f"--{boundary}".encode("utf-8"))
+            parts.append(crlf)
+            parts.append(
+                f'Content-Disposition: form-data; name="{name}"'.encode("utf-8")
+            )
+            parts.append(crlf)
+            parts.append(crlf)
+            parts.append(str(val).encode("utf-8"))
+            parts.append(crlf)
+        for fieldname, filename, ctype, data in files:
+            parts.append(f"--{boundary}".encode("utf-8"))
+            parts.append(crlf)
+            parts.append(
+                f'Content-Disposition: form-data; name="{fieldname}"; '
+                f'filename="{filename}"'.encode("utf-8")
+            )
+            parts.append(crlf)
+            parts.append(f"Content-Type: {ctype}".encode("utf-8"))
+            parts.append(crlf)
+            parts.append(crlf)
+            parts.append(data)
+            parts.append(crlf)
+        parts.append(f"--{boundary}--".encode("utf-8"))
+        parts.append(crlf)
+        return b"".join(parts)
+
+    def send_photo(self, chat_id: str, data: bytes, filename: str = "image.png",
+                   caption: str | None = None, parse_mode: str | None = None,
+                   timeout: int = 60) -> int | None:
+        """이미지 전송(sendPhoto, multipart/form-data). data=raw bytes.
+
+        CC transcript image 블록의 base64 source 를 디코딩한 raw bytes 를
+        그대로 올린다(URL 경로는 sendPhoto 가 인라인 URL 도 받으나 여기선
+        bytes 경로만 취급 — CC 생성 이미지는 base64). 반환=message_id.
+
+        caption 4096자 한도 초과 시 전송 자체가 400 으로 실패하므로 미리 절단.
+        """
+        if not chat_id or not data:
+            return None
+        boundary = "----imadhd" + uuid.uuid4().hex
+        if caption and len(caption) > 1000:
+            caption = caption[:1000]
+        body = self._build_multipart(
+            boundary,
+            [("chat_id", chat_id), ("caption", caption), ("parse_mode", parse_mode)],
+            [("photo", filename, "application/octet-stream", data)],
+        )
+        req = urllib.request.Request(
+            f"{self.base}/sendPhoto",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.loads(r.read().decode("utf-8"))
+        return resp.get("result", {}).get("message_id")
 
     def get_updates(self, timeout: int = 30) -> list:
         # message(본문/ReplyKeyboard 클릭) + callback_query(인라인 버튼 탭) 수신.
