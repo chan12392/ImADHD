@@ -1,5 +1,7 @@
 # ImADHD
 
+> **[English](README.md)** | **[한국어](README.ko.md)**
+
 > A **numbered Telegram MUX** for driving many local terminal sessions from one chat.
 > Each running terminal gets a number (1–N). Send a DM — `2️⃣ check the logs` — and it's injected into terminal #2. The terminal's reply comes back prefixed with the same number.
 
@@ -28,7 +30,11 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.3.2` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.4` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+
+### What's new
+- **`v0.3.4`** — intermittent inject fix: `host.py` now writes the body as **8-char chunks at human-typing cadence** before the submit `Enter`, defeating Claude Code TUI's bracketed-paste detection that occasionally left mid-length messages stuck in the input box.
+- **`v0.3.3`** — **function-button board** (tap `/list`, `/open`, `/close`, `/use`, `/update-adhd`, … instead of typing) + **inline slot picker** popup for `/close /stop /use /new` when ≥2 terminals are active (single active = one-tap run); `/close` now **closes the Windows Terminal tab**; `/update-adhd` shows current/latest version + CHANGELOG and asks **Yes/No** inline before applying.
 
 ## How it works
 ```
@@ -162,14 +168,18 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 | `/list` | show active terminals + slot status |
 | `/new <N>` | reset terminal #N (`/clear`) for a fresh conversation — e.g. `/new 1` |
 | `/open` | open a new terminal in the user's home directory (Windows: new WT window; Linux: new tmux session). Home-based so CC recognizes its existing project & resume sessions. |
-| `/close <N>` | close terminal #N — e.g. `/close 1` |
+| `/close <N>` | close terminal #N (Windows: terminates the whole WT tab tree) — e.g. `/close 1` |
 | `/stop <N>` | send ESC to terminal #N to abort the current task |
+| `/use <N>` | set terminal #N as the **sticky default** — bare messages (no number) then route there until changed. `/use off` clears it |
 | `/pin` | refresh the pinned status board |
 | `/help` | command help |
-| `/update-adhd` | self-update ImADHD — `git pull` → `pytest` → `pm2 restart` (refuses restart on test failure) |
+| `/doctor` | self-diagnostic — router heartbeat, slots, pin, hooks, pm2 status |
+| `/update-adhd` | self-update — shows current vs latest version + latest CHANGELOG, asks **Yes/No** inline, then `git pull` → `pytest` → `pm2 restart` (refuses restart on test failure) |
+
+> **Tip:** you rarely need to type these. The status board's `ReplyKeyboard` is **function-button-first** — tap `📋 /list`, `📂 /open`, `✖️ /close`, `🎯 /use`, `🔄 /update-adhd`, … directly. For `/close /stop /use /new`, tapping the button pops up an **inline slot picker** showing only active terminals (tap the number to run); if just one terminal is active it runs immediately, no picker.
 
 ### Status board (pinned)
-The pinned message shows every slot: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. The `ReplyKeyboard` mirrors the slot numbers so you can tap instead of type. It auto-refreshes as slots change state.
+The pinned message shows every slot: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. The `ReplyKeyboard` is **function-button-first** — four rows of command buttons (`📋 /list`, `📌 /pin`, `🆕 /new`, `📂 /open`, `✖️ /close`, `⏹ /stop`, `🎯 /use`, `❓ /help`, `🩺 /doctor`, `🔄 /update-adhd`) over a compact 1️⃣–6️⃣ number keypad for injecting messages. It auto-refreshes as slots change state.
 
 > **Single-terminal shortcut:** if only one slot is active, you can skip the number — a bare message is injected into that terminal automatically.
 
