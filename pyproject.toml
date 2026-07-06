@@ -18,7 +18,7 @@ classifiers = [
     "Topic :: Communications :: Chat",
     "Topic :: System :: Shells",
 ]
-dependencies = ["python-dotenv>=1.0"]
+dependencies = ["python-dotenv>=1.2.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "ruff>=0.4"]

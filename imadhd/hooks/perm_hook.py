@@ -31,6 +31,7 @@ stdout 에는 JSON 만(CC 가 stdout 파싱). 진단은 ~/.imadhd/debug.log.
 from __future__ import annotations
 
 import datetime
+import html
 import json
 import re
 import sys
@@ -103,6 +104,19 @@ def classify_risk(tool_name: str, tool_input: dict) -> str | None:
     return None
 
 
+def build_approval_body(prefix: str, tool_name: str, summary: str) -> str:
+    escaped_summary = html.escape(summary, quote=False)
+    return f"⚠️ {prefix}위험 명령 승인 ({tool_name}):\n<code>{escaped_summary}</code>"
+
+
+def emit_deny(reason: str) -> None:
+    _emit({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "reason": reason,
+    }})
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -150,7 +164,7 @@ def main() -> int:
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
     perm_id = perm_manager.new_perm_id()
 
-    body = f"⚠️ {prefix}위험 명령 승인 ({tool_name}):\n<code>{summary}</code>"
+    body = build_approval_body(prefix, tool_name, summary)
     markup = {"inline_keyboard": perm_manager.build_inline_keyboard(perm_id)}
     try:
         mids = tg.send(chat_id, body, reply_markup=markup, parse_mode="HTML")
@@ -220,11 +234,7 @@ def main() -> int:
             deny_reason = f"텔레그램 승인 시간초과({int(DEFAULT_TIMEOUT)}s). 거부 처리."
     perm_manager.write_record(s.data_dir, cur)
     _debug_log(f"[perm] denied perm_id={perm_id} reason={deny_reason}")
-    _emit({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "deny",
-        "reason": deny_reason,
-    }})
+    emit_deny(deny_reason)
     return 0
 
 
