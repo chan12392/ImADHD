@@ -37,6 +37,59 @@ def classify_getupdates_error(exc: Exception) -> tuple[str, float]:
     return "wait", 5.0
 
 
+def _hwnd_valid(hwnd: int) -> bool:
+    """hwnd 가 살아있는 창인지. 비Windows·0·파괴 → False."""
+    try:
+        if not hwnd:
+            return False
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
+        return bool(user32.IsWindow(int(hwnd)))
+    except Exception:
+        return False
+
+
+def sync_alive(reg, log=None) -> int:
+    """살아있는 claude.exe 중 registry 미등록·hwnd 무효 슬롯 자가치유.
+
+    SessionStart 훅 의존 보완(2026-07-06). 훅이 안 돈 CC(일반 `claude`·/resume·
+    pid 교체 후 훅 누락)을 라우터가 매 틱 발견 → register_alive_cc 로 지연 등록.
+    이미 등록된 pid 도 hwnd 무효(0/파괴)면 재등록으로 hwnd/session 갱신(복구).
+    단일 CC 우선(대표님 사용 패턴). 다중 CC 는 각각 등록 → auto 주입은 여전히
+    active 길이 1일 때만(명시번호로 선택).
+    반환: 이번 틱에 (신규등록 + hwnd갱신) 시도한 pid 수.
+    """
+    try:
+        from . import proc_win
+        from ..hooks.register_hook import register_alive_cc
+    except Exception as e:
+        if log:
+            log.warning("sync_alive import failed: %s", e)
+        return 0
+    try:
+        alive = proc_win.claude_pids()
+        if not alive:
+            return 0
+        by_pid = {info.pid: info for info in reg.active()}
+        needs: list[int] = []
+        for cc_pid in alive:
+            info = by_pid.get(int(cc_pid))
+            if info is None:
+                needs.append(int(cc_pid))
+            elif not _hwnd_valid(info.hwnd):
+                needs.append(int(cc_pid))  # hwnd 무효 → 갱신
+        for cc_pid in needs:
+            register_alive_cc(cc_pid, reg)
+        return len(needs)
+    except Exception as e:
+        if log:
+            log.warning("sync_alive error: %s", e)
+        return 0
+
+
 def run(settings: "Settings") -> None:
     from ..telegram_api.client import TelegramClient
     from .registry import JSONFileRegistry
@@ -188,6 +241,11 @@ def run(settings: "Settings") -> None:
         # 종료 알림은 채팅이 지저분해져 생략(상태 보드/​핀 + /list 로 확인).
         try:
             reg.sweep_dead(alive_fn)
+            # 자가치유: 살아있는 CC 미등록·hwnd무효 슬롯 런타임 등록(훅 누락 보완).
+            try:
+                sync_alive(reg, log)
+            except Exception as e:
+                log.warning("sync_alive wrapper error: %s", e)
             # 고정 타겟(sticky) 중 사망한 슬롯 자동 해제.
             alive_nums = {i.number for i in reg.active()}
             dead = [c for c, n in ctx.sticky.items() if n not in alive_nums]

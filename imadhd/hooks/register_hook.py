@@ -26,13 +26,15 @@ def _capture_tmux_pane() -> str:
 def _capture_terminal() -> tuple[int, int, dict]:
     """CC 터미널 창 HWND 와 CC PID(claude.exe) 반환 + 진단 정보.
 
-    HWND 우선순위 (2026-07-03 수정):
-      1. **console_hwnd(cc_pid)** — CC pid 에서 결정론적으로 창 역추적
-         (AttachConsole→GetConsoleWindow→PseudoConsole owner). 포그라운드
-         레이스 무관, 세션마다 고유 핸들. 1 WT 창 다중탭이어도 CC본체 pid
-         가 다르면 각기 다른 ConPTY owner hwnd 반환 → 정확 타겟.
-      2. 폴백 GetForegroundWindow (레이스 위험, 마지막 수단)
-      3. 폴백 GetConsoleWindow (detached 훅=보통 0)
+    HWND 확보 (2026-07-06 수정):
+      **console_hwnd(cc_pid)** 만 사용 — CC pid 에서 결정론적으로 창 역추적
+      (AttachConsole→GetConsoleWindow→PseudoConsole owner). 포그라운드
+      레이스 무관, 세션마다 고유 핸들. 1 WT 창 다중탭이어도 CC본체 pid
+      가 다르면 각기 다른 ConPTY owner hwnd 반환 → 정확 타겟.
+      **console_hwnd 실패(0) 시 폴백 없음** — 포그라운드 폴백은 CC 터미널이
+      포그라운드 아닐 때(ZBrush 등) 오탐해 엉뚱한 창으로 inject 했음(제거).
+      hwnd=0 이면 register 보류, 라우터 sync_alive 가 다음 틱 find_terminal_hwnd
+      폴백까지 시도하며 자가치유.
     PID: **CC 프로세스(claude.exe)** pid — 부모체인에서 탐색.
         터미널 pid(WindowsTerminal) 가 아니라 CC pid 를 써야
         CC 종료를 정확히 감지(터미널 창은 탭 닫아도 안 죽음).
@@ -68,20 +70,15 @@ def _capture_terminal() -> tuple[int, int, dict]:
         if ch and user32.IsWindow(ch):
             hwnd, diag["chosen"] = int(ch), "console_hwnd"
 
-        # 2/3) 폴백: 포그라운드 → 자기 콘솔.
+        # 진단만(캡처 비활성). 포그라운드 폴백 제거(2026-07-06): CC 터미널이
+        # 포그라운드 아닐 때(ZBrush 등) 오탐 → inject 엉뚱한 창. console_hwnd
+        # 실패 시 hwnd=0 → register 보류, 라우터 sync_alive 가 다음 틱 재시도.
         fg = user32.GetForegroundWindow() or 0
-        con = kernel32.GetConsoleWindow() or 0
         diag["foreground"] = int(fg)
-        diag["console"] = int(con)
         if fg:
             buf = ctypes.create_unicode_buffer(512)
             user32.GetWindowTextW(fg, buf, 512)
             diag["fg_title"] = buf.value
-        if not hwnd:
-            if fg:
-                hwnd, diag["chosen"] = int(fg), "foreground"
-            elif con:
-                hwnd, diag["chosen"] = int(con), "console"
 
         if hwnd:
             pid_box = wintypes.DWORD()
@@ -106,6 +103,56 @@ def _debug_log(line: str) -> None:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def register_alive_cc(cc_pid: int, reg, force_slot: int | None = None) -> int | None:
+    """살아있는 CC pid 를 registry 에 등록(sync_alive 런타임 자가치유).
+
+    SessionStart 훅이 안 돈 CC(일반 `claude` 시작·/resume·pid 교체 후 훅 누락)
+    를 라우터가 매 틱 발견하면 이 함수로 지연 등록. main() 의 _capture_terminal
+    (os.getpid 기반, SessionStart 훅 전용) 과 달리 **target cc_pid 를 직접 받는다**.
+
+    흐름:
+      hwnd = console_hwnd(cc_pid) or find_terminal_hwnd(cc_pid).
+      둘 다 0/무효 → None 반환(보류). 다음 틱 재시도가 엉뚱한 창 폴백보다 안전.
+      session_id = find_recent_session_id() (최근 jsonl stem 유추, 단일 CC 가정).
+      실패 시 auto-<pid> 임시 id. inject는 작동, 회신은 session_id 정확도에 비례.
+      reg.claim_slot — 동일 pid 슬롯 재사용 시 hwnd/session 갱신(복구 경로).
+
+    반환: 할당/갱신된 슬롯 번호, 보류·실패 시 None.
+    """
+    if not cc_pid:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        from ..core.proc_win import console_hwnd, find_terminal_hwnd, find_recent_session_id
+        user32 = ctypes.windll.user32
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
+
+        hwnd = console_hwnd(cc_pid) or find_terminal_hwnd(cc_pid)
+        if not hwnd or not user32.IsWindow(hwnd):
+            _debug_log(f"[register_alive] cc_pid={cc_pid} hwnd 미확보 → 보류(다음 틱 재시도)")
+            return None
+        # session_id 휴리스틱(최근 jsonl stem)은 단일 CC 가정. 다중 CC 가 동시에
+        # 살면 같은 stem 을 받아 한 slot 으로 충돌 → 마지막 pid 가 덮어쓰기 →
+        # 텔레그램 inject 가 엉뚱한 CC(예: 백호 세션)로 향함. 다른 pid 가 이미
+        # 그 session_id 를 쓰면 고유 auto-<pid> 로 폴백해 각 CC 별도 slot 부여.
+        session_id = find_recent_session_id()
+        if session_id:
+            existing = reg.find_by_session(session_id)
+            if existing and int(existing.pid) != int(cc_pid):
+                session_id = f"auto-{cc_pid}"
+        else:
+            session_id = f"auto-{cc_pid}"
+        started = datetime.datetime.now().isoformat(timespec="seconds")
+        num = reg.claim_slot(session_id, hwnd, int(cc_pid), "", started, force_slot=force_slot)
+        _debug_log(f"[register_alive] cc_pid={cc_pid} → slot {num} session={session_id[:8]} hwnd={hwnd}")
+        return num
+    except Exception as e:
+        _debug_log(f"[register_alive] cc_pid={cc_pid} error: {e!r}")
+        return None
 
 
 

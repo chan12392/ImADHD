@@ -13,6 +13,7 @@ from __future__ import annotations
 import ctypes
 import os
 from ctypes import wintypes
+from pathlib import Path
 
 _IS_WINDOWS = os.name == "nt"
 
@@ -91,6 +92,14 @@ if _IS_WINDOWS:
     user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
     user32.IsWindow.argtypes = [wintypes.HWND]
     user32.IsWindow.restype = wintypes.BOOL
+
+    # sync_alive 자가치유용: pid → top-level 창 hwnd(터미널 창 역추적).
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.EnumWindows.restype = wintypes.BOOL
+    user32.EnumWindows.argtypes = [ctypes.c_void_p, wintypes.LPARAM]
 
 
 def window_title(hwnd: int) -> str:
@@ -228,3 +237,89 @@ def create_time(pid: int) -> float | None:
         return None
     finally:
         kernel32.CloseHandle(h)
+
+
+def claude_pids() -> list[int]:
+    """현재 살아있는 claude.exe pid 목록. sync_alive 자가치유용."""
+    if not _IS_WINDOWS:
+        return []
+    try:
+        snap = snapshot()
+        return [pid for pid, (exe, _ppid) in snap.items() if exe == "claude.exe"]
+    except Exception:
+        return []
+
+
+def find_recent_session_id() -> str | None:
+    """~/.claude/projects/** 에서 가장 최근 mtime *.jsonl 의 stem(session_id) 반환.
+
+    단일 활성 CC 가정(대표님 사용 패턴). SessionStart 훅이 안 돈 세션의
+    session_id 를 sync_alive 가 유추용. 여러 CC 동시 활동이면 가장 최근 하나.
+    없으면 None → 호출처가 auto-<pid> 폴백.
+    """
+    try:
+        root = Path.home() / ".claude" / "projects"
+        if not root.exists():
+            return None
+        latest: Path | None = None
+        latest_mtime = -1.0
+        for p in root.rglob("*.jsonl"):
+            try:
+                m = p.stat().st_mtime
+            except OSError:
+                continue
+            if m > latest_mtime:
+                latest_mtime = m
+                latest = p
+        return latest.stem if latest else None
+    except Exception:
+        return None
+
+
+def _top_window_of_pid(target_pid: int) -> int:
+    """해당 pid 의 보이는(타이틀 있는) top-level 창 hwnd. EnumWindows. 없으면 0."""
+    if not target_pid or not _IS_WINDOWS:
+        return 0
+    try:
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        found: list[int] = []
+
+        def _cb(hwnd: int, _l: int) -> bool:
+            pid_box = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_box))
+            if pid_box.value == target_pid and user32.IsWindowVisible(hwnd):
+                if user32.GetWindowTextLengthW(hwnd) > 0:
+                    found.append(hwnd)
+                    return False  # 첫 창 발견 → 중지
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(_cb), 0)
+        return found[0] if found else 0
+    except Exception:
+        return 0
+
+
+def find_terminal_hwnd(cc_pid: int) -> int:
+    """cc_pid 부모체인의 터미널(WindowsTerminal/conhost/OpenConsole) top-level 창 hwnd.
+
+    console_hwnd(AttachConsole→GetConsoleWindow 방식)의 폴백. CC 가 자체 콘솔을
+    소유하지 않고 부모 터미널이 소유한 ConPTY 환경에서 console_hwnd 가 0 을
+    반환할 때, 부모 터미널 pid 의 보이는 창을 직접 찾는다. 없으면 0.
+    """
+    if not cc_pid or not _IS_WINDOWS:
+        return 0
+    try:
+        snap = snapshot()
+        pid = int(cc_pid)
+        seen: set[int] = set()
+        while pid and pid not in seen:
+            seen.add(pid)
+            exe, ppid = snap.get(pid, ("", pid))
+            if exe in ("windowsterminal.exe", "conhost.exe", "openconsole.exe"):
+                h = _top_window_of_pid(pid)
+                if h:
+                    return h
+            pid = ppid
+    except Exception:
+        return 0
+    return 0
