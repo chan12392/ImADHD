@@ -339,11 +339,19 @@ def _make_pipe_instance(host_pid: int):
 
 
 def _write_record(pty, payload: bytes) -> None:
-    """payload(UTF-8 bytes, '\\n' 미포함) → PTY 에 `payload + "\\r"` 로 쓰기."""
+    """payload(UTF-8 bytes, '\\n' 미포함) → PTY 에 쓰고 엔터(\\r)로 제출.
+
+    2026-07-07 fix: 긴 본문(이미지 경로+캡션 등) 주입 시 CC TUI 가 연속 입력을
+    bracketed-paste 로 감지 → 끝 \\r 이 줄바꿈(제출 아님) 처리되는 현상 방지.
+    text 와 \\r 분리 전송 + 사이 미세 sleep → \\r 이 paste 종료 후 단독 키로 도달
+    = 제출(Enter) 로 인식. #38 shift+enter / #39 이미지 주입 동일 근본.
+    단문은 영향 없음(sleep 0.08s 무시 가능). 부작용 = 주입 80ms 지연."""
     try:
         text = payload.decode("utf-8", "replace")
         if pty.isalive():
-            pty.write(text + "\r")
+            pty.write(text)
+            time.sleep(0.08)
+            pty.write("\r")
     except Exception:
         pass
 

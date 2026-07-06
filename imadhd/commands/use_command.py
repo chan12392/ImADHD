@@ -8,7 +8,8 @@
 """
 from __future__ import annotations
 
-from .base import Command, Message, CommandContext, resolve_active_slot
+from .base import Command, Message, CommandContext, normalize_command, resolve_active_slot
+from ..core import slot_picker
 from ..core import sticky as sticky_store
 
 
@@ -16,14 +17,14 @@ class UseCommand(Command):
     TRIGGERS = {"/use", "/고정", "/타겟"}
 
     def match(self, msg: Message) -> bool:
-        t = (msg.text or "").strip().lower()
+        t = normalize_command(msg.text)
         if not t:
             return False
         return any(t == tr or t.startswith(tr + " ") for tr in self.TRIGGERS)
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
         chat = str(msg.chat_id)
-        body = (msg.text or "").strip()
+        body = normalize_command(msg.text)
         parts = body.split(None, 1)
         arg = parts[1].strip() if len(parts) > 1 else ""
 
@@ -35,8 +36,17 @@ class UseCommand(Command):
             ctx.telegram.send(msg.chat_id, "🎯 고정 타겟 해제")
             return
 
-        # 사용법 안내: 인자 없음 / 숫자 아님
-        if not arg or not arg.lstrip("-").isdigit():
+        # /use 단독 → slot 팝업(0=안내, 1=즉시고정, 2+=선택 대기).
+        if not arg:
+            picked = slot_picker.send_picker(
+                ctx.telegram, msg.chat_id, "use", ctx.registry,
+                (ctx.sticky or {}).get(chat))
+            if picked is not None:
+                slot_picker.rerun_with_slot(self, msg, ctx, "use", picked)
+            return
+
+        # 숫자 아닌 비-off 인자 → 사용법 안내
+        if not arg.lstrip("-").isdigit():
             ctx.telegram.send(
                 msg.chat_id,
                 "사용법: /use 3  → 3번 터미널 고정(본문 자동 주입)\n"

@@ -75,22 +75,41 @@ class PinBoard:
         return "  ".join(parts)
 
     def keyboard_markup(self) -> dict:
-        """ReplyKeyboard: 번호+'.' 버튼(본문 `1️⃣.⭕` 포맷과 시작 일치). 클릭=`1️⃣.` 메시지."""
-        rows, row = [], []
-        for n in range(1, self.max_slots + 1):
-            emoji = NUM_EMOJI.get(n, f"{n}")
-            row.append({"text": f"{emoji}."})
-            if len(row) >= COLS:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
+        """ReplyKeyboard: 기능 버튼(이모지+영문명, 슬래시 없음) 4행 + 번호 키패드.
+
+        기능 버튼 탭 = "📋 list" 전체 텍스트 전송 → Command.match() 매칭
+        (normalize_command 가 선행 이모지 strip + bare 영문에 "/" prepend → "/list").
+        번호 버튼 탭 = 순수 번호 이모지("3️⃣") → InjectCommand 가 pending 토글
+        (본문 없는 bare tap). 번호 필요 명령(close 등)은 인자 없을 때
+        인라인 slot 팝업(slot_picker)으로 번호 선택.
+        """
+        func_rows = [
+            ["📋 list", "🎯 use", "🆕 new"],
+            ["📂 open", "✖️ close", "⏹ stop"],
+            ["📌 pin", "❓ help"],
+            ["🩺 doctor", "🔄 update-adhd"],
+        ]
+        rows = [[{"text": t} for t in r] for r in func_rows]
+        # 번호 키패드 제거 (2026-07-07) — 기능 버튼만. 번호 주입은 타이핑.
         return {"keyboard": rows, "resize_keyboard": True}
 
     def create(self, sticky_num: int | None = None) -> None:
-        """본문(상태, markup 없음→edit 가능) + 버튼(ReplyKeyboard) 메시지 생성."""
+        """본문(상태, markup 없음→edit 가능) + 버튼(ReplyKeyboard) 메시지 생성.
+
+        옛 본문·키보드 잔존 시 먼저 삭제 — /pin 반복 시 옛 ReplyKeyboard(옛 라벨)가
+        활성 키보드로 남아 "안 바뀜" 현상 방지. repin()과 동일 delete 블록(idempotent).
+        """
         if not self.chat:
             return
+        for mid in (self.status_id, self.keyboard_id):
+            if mid:
+                try:
+                    self.tg.delete_message(self.chat, mid)
+                except Exception:
+                    pass
+        self.status_id = None
+        self.keyboard_id = None
+        self._last_text = None
         # 1) 상태 본문 (markup 없음 → editMessageText 갱신 가능)
         sids = self.tg.send(self.chat, self.status_text(sticky_num))
         if sids:

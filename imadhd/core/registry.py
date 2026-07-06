@@ -58,6 +58,7 @@ class SessionInfo:
     tmux_pane: str = ""    # Linux/tmux 전용 세션 식별자. Windows=""(미사용)
     host_pid: int = 0      # host.py(PTY-bridge) pid. 파이프 이름 imadhd-stdin-<host_pid>.
                           # 0 = 래핑 없는 직접 CC(sendkeys 폴백 대상). B-근본 pid 기반 파이프.
+    label: str = ""        # /label N 이름 으로 지정한 표시 이름. /list 표시용.
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -172,6 +173,7 @@ class JSONFileRegistry(Registry):
                     info.tmux_pane = tmux_pane or v.get("tmux_pane", "")
                     # host_pid 도 빈 호출 방어: 새 값 0 이면 기존값 보존(재사용 시 파이프 경로 유지).
                     info.host_pid = host_pid or v.get("host_pid", 0)
+                    info.label = v.get("label", "")  # 라벨 보존(재사용 시 유지)
                     data[k] = info.to_dict()
                     self._write(data)
                     return num
@@ -245,6 +247,17 @@ class JSONFileRegistry(Registry):
             v = data.get(str(number))
             if v:
                 v["hwnd"] = int(hwnd)
+                self._write(data)
+                return True
+            return False
+
+    def set_label(self, number: int, label: str) -> bool:
+        """해당 슬롯의 표시 라벨 갱신. /label N 이름. 빈 문자열=삭제."""
+        with self._locked():
+            data = self._read()
+            v = data.get(str(number))
+            if v:
+                v["label"] = (label or "")[:50]
                 self._write(data)
                 return True
             return False

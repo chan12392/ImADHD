@@ -26,7 +26,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, normalize_command
 
 # imadhd 패키지 루트(repo). host.py 를 `-m imadhd.host` 로 실행하려면
 # cwd 가 repo 여야(또는 패키지가 설치돼야) 모듈 해석이 된다.
@@ -100,8 +100,7 @@ class OpenCommand(Command):
 
     def match(self, msg: Message) -> bool:
         # /open 단일만 매칭(/open glm 등 변형 제거). 인자 붙으면 미매치.
-        text = (msg.text or "").strip().lower()
-        return text in self.TRIGGERS
+        return normalize_command(msg.text) in self.TRIGGERS
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
         if os.name == "nt":

@@ -5,7 +5,8 @@ transport.send_key(VK_ESCAPE) — 포커스 강제 후 keybd_event.
 """
 from __future__ import annotations
 
-from .base import Command, Message, CommandContext, resolve_active_slot
+from .base import Command, Message, CommandContext, normalize_command, resolve_active_slot
+from ..core import slot_picker
 
 VK_ESCAPE = 0x1B
 
@@ -14,13 +15,17 @@ class StopCommand(Command):
     TRIGGERS = ("/stop", "/중단", "/정지")
 
     def match(self, msg: Message) -> bool:
-        t = (msg.text or "").strip().lower()
+        t = normalize_command(msg.text)
         return any(t == tr or t.startswith(tr + " ") for tr in self.TRIGGERS)
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
-        parts = (msg.text or "").split()
+        parts = normalize_command(msg.text).split()
         if len(parts) < 2 or not parts[1].isdigit() or int(parts[1]) <= 0:
-            ctx.telegram.send(msg.chat_id, "사용법: /stop 1  → 1번 터미널 작업 중단(ESC)")
+            sticky_num = (ctx.sticky or {}).get(msg.chat_id)
+            picked = slot_picker.send_picker(
+                ctx.telegram, msg.chat_id, "stop", ctx.registry, sticky_num)
+            if picked is not None:
+                slot_picker.rerun_with_slot(self, msg, ctx, "stop", picked)
             return
         num = int(parts[1])
         _, info = resolve_active_slot(

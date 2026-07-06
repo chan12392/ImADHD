@@ -167,7 +167,6 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 | `/pin` | refresh the pinned status board |
 | `/help` | command help |
 | `/update-adhd` | self-update ImADHD — `git pull` → `pytest` → `pm2 restart` (refuses restart on test failure) |
-| `/update` | inject `!claude update` into the active CC slot (Claude Code version bump from your phone) |
 
 ### Status board (pinned)
 The pinned message shows every slot: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. The `ReplyKeyboard` mirrors the slot numbers so you can tap instead of type. It auto-refreshes as slots change state.

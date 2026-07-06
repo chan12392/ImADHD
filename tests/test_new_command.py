@@ -48,20 +48,22 @@ def test_new_clears_alive_slot(tmp_path):
     assert any("새 대화" in t for _, t in ctx.telegram.sent)
 
 
-def test_new_no_arg_shows_usage(tmp_path):
+def test_new_no_arg_no_active_informs(tmp_path):
+    """인자 없음 + 활성 0 → slot_picker 가 '열린 터미널 없음' 안내."""
     reg = JSONFileRegistry(tmp_path / "r.json")
     ctx = _ctx(reg, True)
     NewCommand().handle(Message("9", "/new", {}), ctx)
     assert ctx.transport.injected is None
-    assert any("사용법" in t for _, t in ctx.telegram.sent)
+    assert any("열린" in t for _, t in ctx.telegram.sent)
 
 
-def test_new_bad_arg_shows_usage(tmp_path):
+def test_new_bad_arg_no_active_informs(tmp_path):
+    """non-digit 인자 + 활성 0 → slot_picker 안내."""
     reg = JSONFileRegistry(tmp_path / "r.json")
     ctx = _ctx(reg, True)
     NewCommand().handle(Message("9", "/new abc", {}), ctx)
     assert ctx.transport.injected is None
-    assert any("사용법" in t for _, t in ctx.telegram.sent)
+    assert any("열린" in t for _, t in ctx.telegram.sent)
 
 
 def test_new_unknown_slot(tmp_path):

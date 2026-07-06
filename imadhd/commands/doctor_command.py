@@ -10,7 +10,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, normalize_command
 
 # install.py HOOK_DEFS 와 동일 (재설치 안내 메시지용으로만 사용).
 EXPECTED_HOOKS = {
@@ -25,7 +25,7 @@ class DoctorCommand(Command):
     TRIGGERS = {"/doctor", "/진단", "/status"}
 
     def match(self, msg: Message) -> bool:
-        return (msg.text or "").strip().lower() in self.TRIGGERS
+        return normalize_command(msg.text) in self.TRIGGERS
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
         s = ctx.settings

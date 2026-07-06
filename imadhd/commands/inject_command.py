@@ -142,6 +142,10 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
     mark_marker_pending(ctx.settings.data_dir, info.session_id)
     result = ctx.transport.inject(info.to_dict(), inject_text)
+    _debug_log(
+        f"[inject-done] num={num} method={getattr(result, 'method', '?')} "
+        f"delivered={getattr(result, 'delivered', False)} body={inject_text!r}"
+    )
     # transport 가 InjectResult(진짜) 반환 시에만 복구 처리. 테스트 FakeTransport(None) 방어.
     new_hwnd = getattr(result, "rediscovered_hwnd", None)
     if new_hwnd:
