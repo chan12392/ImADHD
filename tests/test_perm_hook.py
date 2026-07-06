@@ -3,7 +3,7 @@
 main() 은 Settings/Telegram/폴링 의존 → classify_risk 순수 함수만 단위 테스트.
 라이브 프로브(실제 CC 차단)는 대표님 텔레그램 검증 단계.
 """
-from imadhd.hooks.perm_hook import classify_risk, DANGEROUS_PATTERNS
+from imadhd.hooks.perm_hook import classify_risk, build_approval_body, DANGEROUS_PATTERNS
 
 
 # ───────────────────────── 안전 명령 (None 반환) ─────────────────────────
@@ -90,3 +90,14 @@ def test_summary_truncates_long_command():
     s = classify_risk("Bash", {"command": long_cmd})
     assert s is not None
     assert len(s) <= 800
+
+
+# ───────────────────────── 승인 메시지 HTML 이스케이프 ─────────────────────────
+
+def test_approval_body_escapes_html():
+    """summary 의 <,>,& 가 HTML parse_mode 깨짐/인젝션 방지로 이스케이프."""
+    body = build_approval_body("1️⃣ ", "Bash", "echo <script>alert(1)</script> & done")
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+    assert "&amp;" in body
+    assert "<code>" in body  # 포맷 유지
