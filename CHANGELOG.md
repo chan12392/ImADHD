@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5 — 2026-07-07
+- **Progress board (#43)** — while a slot is busy, the router shows a per-slot counter `🟡 N번 작업중 (Xs)`, refreshed every 1 s via `edit_message_text`; when the slot goes idle the counter is auto-deleted. Completion results are still delivered as a separate reply DM, so the counter only reflects "work in progress". Togglable via `IMADHD_PROGRESS_BOARD=0` (default on). Commit `aa7ba22`.
+- **Silent progress messages (#44)** — the counter's initial `send` now uses `disable_notification=True`, so "working" pings arrive without a notification sound (`edit`/`delete` are silent by nature). The message itself still appears. Commit `4a4c48a`.
+- **perm-hook hardening (no behavior change)** — debug log now records an input **sha256 fingerprint** (length + 12-hex digest) instead of the raw body, and the Telegram approval body is run through `html.escape` to prevent `parse_mode=HTML` breakage / injection. Send-failure stays fail-open; verdict logic unchanged. Commit `014d0af`.
+- **Verification**: pytest 335 passed; live board behavior + silent send confirmed on respawned router.
+
 ## 0.3.4 — 2026-07-07
 - **Intermittent inject fix (#38)** — `host.py` `_write_record` now writes the body as **8-char chunks with 15 ms sleep between** (human-typing cadence) before the standalone submit `\r`. Previous single bulk write tripped CC TUI bracketed-paste detection on mid-length bodies → trailing `\r` became a newline → text stuck in the input box ("가끔 주입 안됨"). Chunked write defeats paste detection. Verified live on respawned CC (1번 백호). Cost: ~200 ms per 100 chars.
 

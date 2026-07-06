@@ -30,9 +30,10 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.3.4` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.5` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
 
 ### What's new
+- **`v0.3.5`** — **progress board**: each busy slot shows a live `🟡 N번 작업중 (Xs)` counter (1 s refresh, auto-deleted on idle; completion still arrives as a separate reply DM), sent **silently** so it doesn't play a notification sound. Plus `perm_hook` log/input hardening (sha256 fingerprint + `html.escape`) with no behavior change.
 - **`v0.3.4`** — intermittent inject fix: `host.py` now writes the body as **8-char chunks at human-typing cadence** before the submit `Enter`, defeating Claude Code TUI's bracketed-paste detection that occasionally left mid-length messages stuck in the input box.
 - **`v0.3.3`** — **function-button board** (tap `/list`, `/open`, `/close`, `/use`, `/update-adhd`, … instead of typing) + **inline slot picker** popup for `/close /stop /use /new` when ≥2 terminals are active (single active = one-tap run); `/close` now **closes the Windows Terminal tab**; `/update-adhd` shows current/latest version + CHANGELOG and asks **Yes/No** inline before applying.
 
@@ -62,7 +63,7 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 - Terminal ↔ number mapping is tracked in a runtime registry (**Windows**: HWND + pid + session id; **Linux**: tmux pane + pid + session id) — so a renamed/recreated window/pane is rediscovered automatically.
 - **Windows:** one Claude Code session per Windows Terminal window. Run each terminal in its **own** WT window — tabs in one window can't be told apart. (Tip: `wt -w new …`, or WT `"windowingBehavior": "new"`.)
 - **Linux:** each session gets its own tmux pane (captured at `SessionStart`), so a single tmux server hosts many sessions cleanly.
-- A **status board** (Telegram `ReplyKeyboard`) shows every slot at a glance: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead.
+- A **status board** (Telegram `ReplyKeyboard`) shows every slot at a glance: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. On top of that, a **progress board** posts a silent `🟡 N번 작업중 (Xs)` counter per busy slot (1 s refresh, auto-deleted on idle) — toggle with `IMADHD_PROGRESS_BOARD=0`.
 
 ## Components
 | Piece | Role |
@@ -74,7 +75,7 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 | `transports/` | **pluggable** terminal input — `pipe_win` (focus-less, Windows default), `sendkeys_win` (focus-stealing fallback), `tmux_linux` (Linux default) |
 | `host.py` | Windows PTY-bridge for `pipe_win`: owns the ConPTY, muxes keyboard ∪ named pipe so Telegram input never steals focus |
 | `commands/` | **pluggable** Telegram commands (`3️⃣ ...`, `/list`, `/new`, `/open`, `/close`, ...) |
-| `boards/` | status board (pinned text + ReplyKeyboard) |
+| `boards/` | status board (pinned text + ReplyKeyboard) + progress board (per-slot `🟡 작업중` counter) |
 | `hooks/register_hook.py` | CC `SessionStart`: claim a number |
 | `hooks/reply_hook.py` | CC `Stop`: capture + send reply |
 | `hooks/ask_hook.py` | CC `PreToolUse` (`AskUserQuestion`): route clarifying questions to Telegram **inline buttons** |
