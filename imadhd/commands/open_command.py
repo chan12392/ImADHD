@@ -157,15 +157,16 @@ class OpenCommand(Command):
         if os.name == "nt":
             env = build_open_env(os.environ, use_glm)
             claude_cmd = ["claude"] if not model else ["claude", "--model", model]
-            # host.py(ConPTY + named-pipe 서버) 로 claude 를 래핑해 띄운다.
-            # 기존엔 cmd /c claude 로 래핑 없이 열어 파이프 서버가 안 떠 →
-            # 텔레그램 주입이 포커스 강제 전환 없이 안 됐다(2026-07-06).
-            py = sys.executable or "python.exe"
-            inner = (
-                f'cd /d "{_REPO_ROOT}" '
-                f'&& "{py}" -X utf8 -m imadhd.host -- '
-                + subprocess.list2cmdline(claude_cmd)
-            )
+            # WT 탭에서 claude 를 직접 실행(수동 터미널과 동등). host.py(winpty PTY
+            # + named-pipe 서버) 래핑은 한때 pipe 기반 백그라운드(포커스 무점유) 주입
+            # 용이었으나, 현재 transport=sendkeys(포커스 주입)라 파이프 서버를 쓰지
+            # 않는다. host.py 경로는 npm shim(cmd /c claude.cmd)이 node(claude.exe)
+            # 를 띄운 뒤 즉시 exit → winpty PTY 자식 사망 → host.py 종료(code 1) →
+            # claude.exe 가 TTY 없이 고아화돼 transcript 도 안 쓰고 입력도 처리 못
+            # 하는 버그가 있어 제거(2026-07-06 실측). 직접 실행 시 WT 탭이 진짜 TTY
+            # 를 제공하므로 수동 터미널과 동일하게 동작(sync_alive 가 등록, sendkeys
+            # 가 주입, transcript 정상 작성 → 회신 경로까지 정상).
+            inner = f'cd /d "{_REPO_ROOT}" && ' + subprocess.list2cmdline(claude_cmd)
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
