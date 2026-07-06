@@ -160,20 +160,15 @@ class OpenCommand(Command):
         if os.name == "nt":
             env = build_open_env(os.environ, use_glm)
             claude_cmd = ["claude"] if not model else ["claude", "--model", model]
-            # claude 를 WT 탭에 직접 실행(2026-07-06 host.py 경로 제거).
-            # 이유: host.py PTY-bridge 의 named-pipe 서버(데몬스레드)가 조용히
-            # 죽는 회귀 — slot 3 에서 6회 /open 시도 중 0회 연결, 에러 로그 0건인데
-            # 파이프가 소실됨(스레드 사망 추정). 파이프 죽으면 pipe_win → sendkeys
-            # 폴백이나, sendkeys 는 host.py ConPTY 창클래스(PseudoConsoleWindow)에
-            # 도달 못 함 → 주입 유실. 백호(StreamDeck)/whale 직접 CC 는 claude 를
-            # WT 탭에 직접 띄워 CASCADIA 클래스 → sendkeys paste 로 정상 작동(실측).
-            # /open 도 동일 경로 → host.py 제거하면 3 버그 동시 해결:
-            #   #2 주입: CASCADIA → paste 도달. #1 cmd-as-slot: 중간 프로세스 제거.
-            #   #3 /close: taskkill /T 가 cc_pid 트리(직부모 cmd 포함) 정상 종료.
-            # 트레이드오프: 포커스 강제 전환(sendkeys) — 백호와 동일, 이미 실사용 중.
-            # cmd /c "cd && claude" → claude.CMD shim → claude.exe 동기 exec → 종료 시
-            # cmd 종료 → WT 탭 closeOnExit.
-            inner = f'cd /d "{_REPO_ROOT}" && ' + " ".join(claude_cmd)
+            # host.py PTY-bridge 복원(2026-07-06 B-근본 pid 기반). host 가
+            # bin/claude.exe 를 ConPTY 로 spawn. host.py 가 자기 pid(os.getpid())를
+            # 자식 CC env 에 IMADHD_HOST_PID 로 주입 → register_hook 이 registry 에
+            # host_pid 저장 → router 가 imadhd-stdin-<host_pid> 파이프로 주입
+            # (포커스 전환 0, 백그라운드 주입). 이전 slot 기반 파이프의 불일치/좀비
+            # 경쟁 회귀(slot 3: 6회 0연결) 해결 — 파이프 이름이 프로세스 고유 pid.
+            # host 인자: [--] 뒤 child args 를 claude 에 그대로 전달.
+            inner_parts = [f'cd /d "{_REPO_ROOT}" && py -m imadhd.host --'] + claude_cmd
+            inner = " ".join(inner_parts)
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
