@@ -5,7 +5,7 @@ transport.send_key(VK_ESCAPE) — 포커스 강제 후 keybd_event.
 """
 from __future__ import annotations
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, resolve_active_slot
 
 VK_ESCAPE = 0x1B
 
@@ -23,13 +23,14 @@ class StopCommand(Command):
             ctx.telegram.send(msg.chat_id, "사용법: /stop 1  → 1번 터미널 작업 중단(ESC)")
             return
         num = int(parts[1])
-        info = ctx.registry.get(num)
+        _, info = resolve_active_slot(
+            msg,
+            ctx,
+            num,
+            missing_message=f"❌ {num}번 터미널 없음",
+            dead_message=f"❌ {num}번 터미널 종료됨",
+        )
         if not info:
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
-            return
-        if not ctx.transport.is_alive(info.to_dict()):
-            ctx.registry.release(num)
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료됨")
             return
         try:
             ctx.transport.send_key(info.to_dict(), VK_ESCAPE)

@@ -16,6 +16,8 @@ import os
 import sys
 from pathlib import Path
 
+from ..core.io_utils import debug_log as _debug_log
+
 
 def _capture_tmux_pane() -> str:
     """Linux/tmux 세션 안이면 tmux 가 자동 export 하는 pane id(예: '%7') 반환.
@@ -92,17 +94,6 @@ def _capture_terminal() -> tuple[int, int, dict]:
     except Exception as e:
         diag["error"] = repr(e)
         return 0, os.getpid(), diag
-
-
-def _debug_log(line: str) -> None:
-    """~/.imadhd/debug.log 에 진단 라인 추가. 설치 문제 실측용."""
-    try:
-        p = Path.home() / ".imadhd" / "debug.log"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
 
 
 def register_alive_cc(cc_pid: int, reg, force_slot: int | None = None) -> int | None:

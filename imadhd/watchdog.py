@@ -10,22 +10,13 @@ from __future__ import annotations
 
 import subprocess
 import time
-from pathlib import Path
+
+from .core.io_utils import debug_log as _debug_log
 
 # router 루프는 통상 <10s 주기로 heartbeat 갱신(long-poll timeout=5s +
 # sweep/board 처리). 60s 여유를 둬 일시적 지연 오탐 방지.
 STALE_THRESHOLD_SEC = 60.0
 CHECK_INTERVAL_SEC = 20.0
-
-
-def _debug_log(line: str) -> None:
-    try:
-        p = Path.home() / ".imadhd" / "debug.log"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
 
 
 def _heartbeat_age(heartbeat_path: Path) -> float | None:

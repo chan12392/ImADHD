@@ -17,7 +17,8 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-from pathlib import Path
+
+from .core.io_utils import debug_log as _debug_log
 
 # 부팅 시 확실히 살려야 할 대상. watchdog 포함 — 1차가 못 깨우면 2차 무의미.
 TARGETS = ("imadhd", "imadhd-watchdog")
@@ -25,17 +26,6 @@ TARGETS = ("imadhd", "imadhd-watchdog")
 # resurrect 직후 pm2 db 갱신 대기 + 재시도 폭주 방지.
 MAX_ATTEMPTS = 3
 RESTART_RETRY_INTERVAL_SEC = 3.0
-
-
-def _debug_log(line: str) -> None:
-    """watchdog.py 의 _debug_log 와 같은 경로(~/.imadhd/debug.log)."""
-    try:
-        p = Path.home() / ".imadhd" / "debug.log"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
 
 
 def _pm2_jlist() -> list:

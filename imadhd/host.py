@@ -560,7 +560,10 @@ def main() -> int:
     enable_vt_output()
 
     env_str = _build_env_string()
-    cwd = os.getcwd()
+    # CC 작업 cwd 분리(2026-07-06): host.py 모듈 해석은 repo(py -m)지만
+    # CC 자체는 IMADHD_CC_CWD 에서 시작. 미지정 시 host.py cwd 상속(레거시/테스트).
+    # 목적: CC 가 홈 기반 프로젝트(C--Users-chan1) 로 인식 → resume 세션 목록 노출.
+    cwd = os.environ.get("IMADHD_CC_CWD") or os.getcwd()
 
     pty = winpty.PTY(cols, rows)
     appname = child_argv[0]

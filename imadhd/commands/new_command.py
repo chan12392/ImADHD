@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, resolve_active_slot
 
 
 class NewCommand(Command):
@@ -24,13 +24,14 @@ class NewCommand(Command):
             ctx.telegram.send(msg.chat_id, "사용법: /new 1  → 1번 터미널 새 대화(/clear)")
             return
         num = int(parts[1])
-        info = ctx.registry.get(num)
+        _, info = resolve_active_slot(
+            msg,
+            ctx,
+            num,
+            missing_message=f"❌ {num}번 터미널 없음",
+            dead_message=f"❌ {num}번 터미널 종료",
+        )
         if not info:
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
-            return
-        if not ctx.transport.is_alive(info.to_dict()):
-            ctx.registry.release(num)
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료")
             return
         ctx.transport.inject(info.to_dict(), "/clear")
         ctx.registry.set_status(num, "idle")

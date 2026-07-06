@@ -642,7 +642,7 @@ public 전환 후 모바일 UX + 자가진단 3종.
 
 ### 14.3 `/open` host wrapping
 
-`/open`(및 `/open <model>`)이 **pipe-capable** 터미널을 엶: `claude` 직접 대신 `host.py` 로 감싸 띄움.
+`/open` 이 **pipe-capable** 터미널을 엶: `claude` 직접 대신 `host.py` 로 감싸 띄움. CC 작업 cwd = 사용자 홈(IMADHD_CC_CWD) — host.py 모듈 해석은 repo, CC 는 홈에서 시작해 홈 기반 프로젝트/세션 인식.
 
 Windows(detached, Windows Terminal 경유):
 ```

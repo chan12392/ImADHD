@@ -10,9 +10,9 @@ key=chat_id(str), value=slot_num(int). 빈 파일/결측 → {}.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
+
+from .io_utils import atomic_write_json
 
 NAME = "sticky.json"
 
@@ -43,16 +43,5 @@ def load(data_dir) -> dict:
 def save(data_dir, sticky: dict) -> None:
     """sticky dict 전체를 원자적 쓰기로 저장. router 단일 writer."""
     p = _path(data_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
     data = {str(k): int(v) for k, v in sticky.items()}
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, p)
-    finally:
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+    atomic_write_json(p, data)

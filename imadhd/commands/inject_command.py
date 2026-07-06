@@ -13,7 +13,7 @@ import re
 import time
 from pathlib import Path
 
-from .base import Command, Message, CommandContext
+from .base import Command, Message, CommandContext, resolve_active_slot
 
 # register(SessionStart) 직후 CC REPL 이 아직 입력을 못 받는 초기화 구간이
 # 있다(2026-07-05 실사고: 새 세션 열자마자 즉시 주입하면 텍스트+Enter 가
@@ -71,13 +71,14 @@ class InjectCommand(Command):
         num = parse_leading_number(msg.text)
         if num is None:
             return
-        info = ctx.registry.get(num)
+        _, info = resolve_active_slot(
+            msg,
+            ctx,
+            num,
+            missing_message=f"❌ {num}번 터미널 없음",
+            dead_message=f"❌ {num}번 터미널 종료",
+        )
         if not info:
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 없음")
-            return
-        if not ctx.transport.is_alive(info.to_dict()):
-            ctx.registry.release(num)
-            ctx.telegram.send(msg.chat_id, f"❌ {num}번 터미널 종료")
             return
         body = msg.text[len(leading_prefix(msg.text)):].strip()
         # A) 단독 선택(번호만/상태마크/점) → 선택모드 pending 토글
@@ -114,13 +115,14 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
 
     InjectCommand(즉시 주입) 와 router(pending 본문 주입) 모두 사용.
     """
-    info = ctx.registry.get(num)
+    _, info = resolve_active_slot(
+        Message(str(chat_id), "", {}),
+        ctx,
+        num,
+        missing_message=f"❌ {num}번 터미널 없음",
+        dead_message=f"❌ {num}번 터미널 종료",
+    )
     if not info:
-        ctx.telegram.send(chat_id, f"❌ {num}번 터미널 없음")
-        return
-    if not ctx.transport.is_alive(info.to_dict()):
-        ctx.registry.release(num)
-        ctx.telegram.send(chat_id, f"❌ {num}번 터미널 종료")
         return
     try:
         started = datetime.datetime.fromisoformat(info.started_at)

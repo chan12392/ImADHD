@@ -1,36 +1,28 @@
-"""/open 명령: 클로드 터미널 1개 새로 생성 (WT 신규 탭 + claude 직접 실행).
+"""/open 명령: 클로드 터미널 1개 새로 생성 (WT 신규 탭 + host.py PTY-bridge).
 
-`wt -w new new-tab --title Claude cmd /c "cd <repo> && claude"` 를 detached
-로 spawn. claude 는 WT 탭의 직자식 → 창클래스 CASCADIA → 라우터의
-sendkeys_win(paste) 주입이 정상 도달(백호/whale 직접 CC 와 동일 경로, 실측).
+`wt -w new new-tab --title Claude cmd /c "cd <repo> && py -m imadhd.host -- claude"`
+를 detached 로 spawn. host.py 가 bin/claude.exe 를 ConPTY 로 spawn 하고 자기
+pid 를 자식 CC env 에 IMADHD_HOST_PID 로 주입 → register_hook 이 registry 에
+host_pid 저장 → router 가 imadhd-stdin-<host_pid> 파이프로 주입(포커스 전환 0).
 
-과거(2026-07-06 일시적) host.py PTY-bridge + named-pipe 경로는 제거:
-파이프 서버 데몬스레드가 조용히 죽어 파이프 소실(slot 3: 6회 /open, 0회 연결,
-에러로그 0건) → pipe 폴백 sendkeys 가 PseudoConsoleWindow 클래스에 도달 못 해
-주입 유실. 직접 claude 실행이 3 버그(주입 유실 / cmd-as-slot / close 잔존) 해결.
-SessionStart 훅(btg-register)이 새 CC 세션을 잡아 자동 번호 할당.
+B-근본(2026-07-06): 파이프 이름 = host_pid(프로세스 고유). 이전 slot 기반
+파이프(slot 3: 6회 0연결) 의 불일치/좀비 경쟁 회귀 해결.
+
+CC 작업 cwd = 사용자 홈(Path.home()). host.py 모듈 해석은 repo(py -m)지만
+CC 자체는 IMADHD_CC_CWD(=홈) 에서 시작 → CC 가 홈 기반 프로젝트
+(`~/.claude/projects/C--Users-<name>/`) 로 인식 → resume 세션 목록에 기존
+세션이 뜸. 대표님(user/chan1) 과 OSS 사용자 모두 동일 — 본인 홈이 곧 CC 의
+자격증명/세션 기반 디렉터리.
+
+/open 단일 명령(2026-07-06): 모델/provider 변형(/open glm, /open sonnet 등)
+제거. 항상 기본 claude + 홈 cwd. 모델 변경은 CC 세션 안에서 직접.
 
 claude = npm 글로벌(claude.cmd) → cmd /c 로 실행(.cmd 셸 필요).
-
-provider/모델 선택: `/open` 기본은 Anthropic 공식(z.ai 프록시 env 제거) +
-CC 기본 모델. `/open glm`(또는 z.ai/zai)은 상속받은 z.ai 프록시 env 그대로
-유지. 그 외 인자(`/open opus`, `/open sonnet-4-5` 등)는 Anthropic 공식 +
-`claude --model <인자>` 로 그 모델 지정 실행. 숫자 하나짜리 인자(`/open 1`)는
-슬롯 선택 등 다른 명령과 헷갈릴 수 있어 제외.
-
-router(pm2) 프로세스가 예전에 z.ai 모드였던 셸에서 뜬 채로 있으면 그
-env(ANTHROPIC_BASE_URL 등)를 그대로 물려받아 "/open"만 해도 항상 z.ai로
-뜨는 문제가 있었다(2026-07-04 발견) — 토큰은 코드에 넣지 않고 이미
-상속된 env를 지우거나 유지하는 방식으로 전환한다.
 """
 from __future__ import annotations
 
 import os
-import re
-import shlex
-import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -43,8 +35,8 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 _DETACHED = 0x08
 _NEW_PROC_GROUP = 0x200
 
-# z.ai(GLM) 프록시 전용 env 키. 공식 Anthropic 모드에선 이걸 지워야
-# 로그인된 계정(~/.claude 자격증명)으로 정상 라우팅된다.
+# z.ai(GLM) 프록시 전용 env 키. /open 단일화(Anthropic 공식 고정)로 항상 제거 —
+# router(pm2) 가 옛 z.ai 셸 env 를 물려받아도 새 claude 는 로그인 계정으로 라우팅.
 _ANTHROPIC_PROXY_ENV_KEYS = (
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
@@ -52,36 +44,11 @@ _ANTHROPIC_PROXY_ENV_KEYS = (
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
 )
-_GLM_ALIASES = ("glm", "z.ai", "zai")
-
-# 모델명은 안전한 문자클래스만 허용. 셸 메타/치환(`$`, `;`, `|`, backtick, 공백 등) 차단.
-_MODEL_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-
-
-def build_linux_launch_cmd(use_glm: bool, model: str | None) -> str:
-    """Linux(tmux) 새 세션용 claude 실행 커맨드 문자열 조립 (안전 버전).
-
-    보안:
-    - GLM 토큰은 bash export 문(커맨드라인/ps/로그 노출)이 아니라
-      0600 권한의 ~/.anthropic.env 파일을 source 하는 방식으로만 주입.
-    - --dangerously-skip-permissions는 기본 off. IMADHD_SKIP_PERMS=1 일 때만.
-    - model 인자는 _MODEL_RE 로 사전 검증 + shlex.quote 이중 방어.
-    """
-    parts = ["bash -lc '"]
-    parts.append("export PATH=$HOME/.local/bin:$HOME/.bun/bin:$PATH; ")
-    if use_glm:
-        parts.append("source $HOME/.anthropic.env 2>/dev/null || true; ")
-    parts.append("cd /home/user && exec claude")
-    if os.environ.get("IMADHD_SKIP_PERMS") == "1":
-        parts.append(" --dangerously-skip-permissions")
-    if model:
-        parts.append(f" --model {shlex.quote(model)}")
-    parts.append("'")
-    return "".join(parts)
 
 
 def _wt_path() -> str:
     """wt.exe 경로. PATH → LOCALAPPDATA fallback(공개 툴 호환)."""
+    import shutil
     return (
         shutil.which("wt.exe")
         or os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\Default\AppData\Local"),
@@ -89,86 +56,59 @@ def _wt_path() -> str:
     )
 
 
-def build_open_env(base_env: dict, use_glm: bool) -> dict:
-    """새 claude 프로세스에 넘길 env 구성. use_glm=False 면 z.ai 프록시 키 제거.
+def build_open_env(base_env: dict) -> dict:
+    """새 claude 프로세스에 넘길 env 구성.
 
-    router(pm2) 자체가 CC 터미널 안에서 `pm2 start` 로 기동된 이력이 있어
-    CLAUDECODE=1 / CLAUDE_CODE_SESSION_ID(고정된 옛 부모 세션) /
-    CLAUDE_CODE_CHILD_SESSION=1 같은 "나는 CC의 nested child 세션이다"
-    identity env 를 그대로 물려받는다. 이걸 새로 띄우는 claude 프로세스에
-    그대로 넘기면 그 프로세스가 옛 고정 세션의 자식으로 오인해 자기
-    transcript 를 정상적으로 디스크에 남기지 않는다(2026-07-05 실사고:
-    /open 으로 연 터미널만 텔레그램 회신 안 감 — transcript .jsonl 자체가
-    끝까지 생성 안 됨. 수동으로 연 터미널은 이 env 오염이 없어 정상)."""
+    - CC 작업 cwd = 홈(IMADHD_CC_CWD). host.py 가 이걸 읽어 CC spawn cwd 로 사용.
+      목적: CC 가 홈 기반 프로젝트로 인식해 resume 세션 목록 노출.
+    - CC identity env 오염 제거: router(pm2) 자체가 CC 터미널 안에서
+      `pm2 start` 로 기동된 이력이 있으면 CLAUDECODE=1 /
+      CLAUDE_CODE_SESSION_ID(고정된 옛 부모 세션) /
+      CLAUDE_CODE_CHILD_SESSION=1 같은 "나는 CC의 nested child 세션이다"
+      identity env 를 물려받아 새 claude 가 자기 transcript 를 디스크에 남기지
+      않는다(2026-07-05 실사고: /open 터미널만 회신 안 감 — transcript .jsonl
+      끝까지 생성 안 됨). AI_AGENT/CLAUDE* 전부 제거.
+    """
     env = dict(base_env)
-    if not use_glm:
-        for k in _ANTHROPIC_PROXY_ENV_KEYS:
-            env.pop(k, None)
+    env["IMADHD_CC_CWD"] = str(Path.home())
+    for k in _ANTHROPIC_PROXY_ENV_KEYS:
+        env.pop(k, None)
     for k in list(env):
         if k == "AI_AGENT" or k.startswith("CLAUDE"):
             env.pop(k, None)
     return env
 
 
-def parse_open_arg(arg: str) -> tuple[bool, str | None]:
-    """/open 뒤 인자 → (use_glm, model). arg 없으면 (False, None).
-    GLM 별칭이면 (True, None). 그 외는 모델명으로 간주해 (False, arg).
-    모델명은 _MODEL_RE(안전 문자클래스) 통과해야 함 — 셸 인젝션 차단."""
-    if not arg:
-        return False, None
-    if arg in _GLM_ALIASES:
-        return True, None
-    if not _MODEL_RE.match(arg):
-        raise ValueError(f"unsafe model arg: {arg!r}")
-    return False, arg
+def build_linux_launch_cmd() -> str:
+    """Linux(tmux) 새 세션용 claude 실행 커맨드 문자열.
+
+    보안:
+    - --dangerously-skip-permissions는 기본 off. IMADHD_SKIP_PERMS=1 일 때만.
+    - /open 단일화: 항상 기본 claude(홈 cwd). 모델/provider 인자 제거.
+    """
+    skip = " --dangerously-skip-permissions" if os.environ.get("IMADHD_SKIP_PERMS") == "1" else ""
+    return (
+        "bash -lc '"
+        "export PATH=$HOME/.local/bin:$HOME/.bun/bin:$PATH; "
+        "cd \"$HOME\" && exec claude" + skip +
+        "'"
+    )
 
 
 class OpenCommand(Command):
     TRIGGERS = ("/open", "/새터미널", "/추가", "/new-term")
 
     def match(self, msg: Message) -> bool:
+        # /open 단일만 매칭(/open glm 등 변형 제거). 인자 붙으면 미매치.
         text = (msg.text or "").strip().lower()
-        if text in self.TRIGGERS:
-            return True
-        parts = text.split(maxsplit=1)
-        if len(parts) != 2 or parts[0] not in self.TRIGGERS:
-            return False
-        arg = parts[1].strip()
-        # 순수 숫자(예: /open 1)는 슬롯 선택 등 다른 명령과 헷갈릴 수 있어 제외.
-        return bool(arg) and not arg.isdigit()
+        return text in self.TRIGGERS
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
-        text = (msg.text or "").strip().lower()
-        parts = text.split(maxsplit=1)
-        arg = parts[1].strip() if len(parts) == 2 else ""
-        try:
-            use_glm, model = parse_open_arg(arg)
-        except ValueError:
-            ctx.telegram.send(
-                msg.chat_id,
-                "❌ 모델명에 허용되지 않는 문자가 있습니다 (A-Z a-z 0-9 . _ - 만 가능).",
-            )
-            return
-
-        if use_glm:
-            label = "GLM(z.ai)"
-        elif model:
-            label = f"Anthropic 공식 · {model}"
-        else:
-            label = "Anthropic 공식"
-
         if os.name == "nt":
-            env = build_open_env(os.environ, use_glm)
-            claude_cmd = ["claude"] if not model else ["claude", "--model", model]
-            # host.py PTY-bridge 복원(2026-07-06 B-근본 pid 기반). host 가
-            # bin/claude.exe 를 ConPTY 로 spawn. host.py 가 자기 pid(os.getpid())를
-            # 자식 CC env 에 IMADHD_HOST_PID 로 주입 → register_hook 이 registry 에
-            # host_pid 저장 → router 가 imadhd-stdin-<host_pid> 파이프로 주입
-            # (포커스 전환 0, 백그라운드 주입). 이전 slot 기반 파이프의 불일치/좀비
-            # 경쟁 회귀(slot 3: 6회 0연결) 해결 — 파이프 이름이 프로세스 고유 pid.
+            env = build_open_env(os.environ)
             # host 인자: [--] 뒤 child args 를 claude 에 그대로 전달.
-            inner_parts = [f'cd /d "{_REPO_ROOT}" && py -m imadhd.host --'] + claude_cmd
-            inner = " ".join(inner_parts)
+            # cwd=repo(py -m 모듈 해석). CC 의 작업 cwd 는 IMADHD_CC_CWD(=홈).
+            inner = f'cd /d "{_REPO_ROOT}" && py -m imadhd.host -- claude'
             try:
                 subprocess.Popen(
                     [_wt_path(), "-w", "new", "new-tab", "--title", "Claude",
@@ -181,11 +121,14 @@ class OpenCommand(Command):
             except Exception as e:
                 ctx.telegram.send(msg.chat_id, f"❌ 터미널 생성 실패: {e}")
                 return
-            ctx.telegram.send(msg.chat_id, f"🆕 새 터미널 생성 중({label})… (수 초 내 번호 할당)")
+            ctx.telegram.send(
+                msg.chat_id,
+                f"🆕 새 터미널 생성 중… cwd={Path.home()} (수 초 내 번호 할당)",
+            )
             return
 
         session_name = f"claude-{int(time.time())}"
-        launch_cmd = build_linux_launch_cmd(use_glm, model)
+        launch_cmd = build_linux_launch_cmd()
         try:
             subprocess.run(["tmux", "new-session", "-d", "-s", session_name, launch_cmd],
                             timeout=10)
@@ -193,5 +136,5 @@ class OpenCommand(Command):
             ctx.telegram.send(msg.chat_id, f"❌ 터미널 생성 실패: {e}")
             return
         ctx.telegram.send(
-            msg.chat_id, f"🆕 새 터미널 생성 중({label}, tmux:{session_name})… (수 초 내 번호 할당)"
+            msg.chat_id, f"🆕 새 터미널 생성 중(tmux:{session_name})… (수 초 내 번호 할당)"
         )
