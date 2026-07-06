@@ -30,9 +30,10 @@ Windows Terminal이나 Stream Deck 런처를 쓰면서 기존 Claude Code 창을
 ---
 
 ## 상태
-`v0.3.4` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
+`v0.3.5` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
 
 ### 새 소식
+- **`v0.3.5`** — **진행 보드**: 작업중인 슬롯마다 실시간 `🟡 N번 작업중 (Xs)` 카운터(1초 갱신, idle 전환 시 자동 삭제; 완료 결과는 별도 답장 DM으로 그대로 도착)를 **무음(silent)**으로 게시합니다. 더해 `perm_hook` 로그/입력 강화(sha256 지문 + `html.escape`, 동작 변화 없음).
 - **`v0.3.4`** — 간헐적 주입 실패 수정: `host.py`가 본문을 이제 **8자 청크로 사람 타이핑 속도**로 쓴 뒤 제출 `Enter`를 보냅니다. 이전의 통째 쓰기는 Claude Code TUI의 bracketed-paste 감지에 걸려, 중간 길이 메시지가 가끔 입력창에만 남는 문제를 해결합니다.
 - **`v0.3.3`** — **기능버튼 보드**(`/list`, `/open`, `/close`, `/use`, `/update-adhd`, … 를 타이핑 대신 탭) + 활성 터미널이 2개 이상일 때 `/close /stop /use /new`용 **인라인 slot picker** 팝업(단일 활성 = 한 번 탭에 즉시 실행); `/close`가 이제 **Windows Terminal 탭을 닫습니다**; `/update-adhd`는 현재/최신 버전과 CHANGELOG를 보여주고 적용 전 **예/아니오** 인라인 확인.
 
@@ -61,7 +62,7 @@ you (phone) ──DM "3️⃣ 로그 확인"──▶ Telegram Bot
 - 터미널↔번호 매핑은 런타임 레지스트리가 추적합니다(**Windows**: HWND + pid + session id, **Linux**: tmux pane + pid + session id). 이름이 바뀌거나 재생성된 창/pane도 자동으로 재발견됩니다.
 - **Windows:** Windows Terminal 창 하나당 Claude Code 세션 하나. 각 터미널은 **자기만의** WT 창에서 실행하세요 — 한 창의 탭은 서로 구분할 수 없습니다. (팁: `wt -w new …`, 또는 WT `"windowingBehavior": "new"`.)
 - **Linux:** 각 세션이 자기만의 tmux pane(`SessionStart`에서 캡처)을 가져, 단일 tmux 서버가 여러 세션을 깔끔하게 호스팅합니다.
-- **상태 보드**(Telegram `ReplyKeyboard`)가 모든 슬롯을 한눈에: ⭕ 대기 / 📝 작업중 / ⏳ 대기중 / ❌ 죽음.
+- **상태 보드**(Telegram `ReplyKeyboard`)가 모든 슬롯을 한눈에: ⭕ 대기 / 📝 작업중 / ⏳ 대기중 / ❌ 죽음. 그 위에 **진행 보드**가 작업중 슬롯마다 무음 `🟡 N번 작업중 (Xs)` 카운터(1초 갱신, idle 시 자동 삭제)를 게시합니다 — `IMADHD_PROGRESS_BOARD=0`으로 끌 수 있습니다.
 
 ## 컴포넌트
 | 구성 | 역할 |
@@ -73,7 +74,7 @@ you (phone) ──DM "3️⃣ 로그 확인"──▶ Telegram Bot
 | `transports/` | **플러그형** 터미널 입력 — `pipe_win`(포커스 无, Windows 기본), `sendkeys_win`(포커스 강탈 폴백), `tmux_linux`(Linux 기본) |
 | `host.py` | `pipe_win`용 Windows PTY-bridge: ConPTY 소유, 키보드 ∪ named pipe 멀티플렉스 → Telegram 입력이 포커스를 뺏지 않음 |
 | `commands/` | **플러그형** Telegram 명령(`3️⃣ ...`, `/list`, `/new`, `/open`, `/close`, ...) |
-| `boards/` | 상태 보드(고정 텍스트 + ReplyKeyboard) |
+| `boards/` | 상태 보드(고정 텍스트 + ReplyKeyboard) + 진행 보드(슬롯별 `🟡 작업중` 카운터) |
 | `hooks/register_hook.py` | CC `SessionStart`: 번호 할당 |
 | `hooks/reply_hook.py` | CC `Stop`: 답장 캡처 + 전송 |
 | `hooks/ask_hook.py` | CC `PreToolUse`(`AskUserQuestion`): 명확화 질문을 Telegram **인라인 버튼**으로 라우팅 |
