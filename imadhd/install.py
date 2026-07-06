@@ -205,12 +205,13 @@ def _patch_resurrect_cmd() -> bool:
     if not cmd_file.exists():
         return False
     body = cmd_file.read_text(encoding="utf-8", errors="replace")
-    if "node.exe" in body and "resurrect" in body:
-        return False  # 이미 패치됨
+    if "imadhd.boot_check" in body:
+        return False  # 이미 boot_check 패치 완료
     patched = (
         "@echo off\r\n"
-        f'rem patched by imadhd install (PATH-독립 node 절대경로 직접 호출) {datetime.date.today()}\r\n'
+        f'rem patched by imadhd install (PATH-독립 node 절대경로 + boot_check) {datetime.date.today()}\r\n'
         f'"{node}" "{pm2_bin}" resurrect\r\n'
+        f'"{PYTHON}" -X utf8 -m imadhd.boot_check\r\n'
     )
     cmd_file.write_text(patched, encoding="utf-8")
     return True
@@ -313,6 +314,13 @@ def step1_pm2_windows() -> None:
     else:
         _run(f'pm2 start "{PYTHON}" --name imadhd --cwd "{REPO_DIR}" -- -X utf8 -m imadhd.cli router')
         _ok("router 기동")
+    # watchdog 기동 (멱등) — 런타임 2차 방어. 부팅 좀비는 1차 boot_check 가,
+    # 런타임 heartbeat stale 은 watchdog 이 잡는다.
+    if _pm2_has("imadhd-watchdog"):
+        _ok("watchdog 이미 online")
+    else:
+        _run(f'pm2 start "{PYTHON}" --name imadhd-watchdog --cwd "{REPO_DIR}" -- -X utf8 -m imadhd.cli watchdog')
+        _ok("watchdog 기동")
     _run("pm2 save")
     _ok("pm2 dump 저장 (재부팅 시 복원 대상)")
     # schtasks 이중화
