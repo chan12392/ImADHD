@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import time
 import urllib.error
 from pathlib import Path
@@ -113,6 +115,7 @@ def run(settings: "Settings") -> None:
     from ..core import sticky as sticky_store
     from ..core import slot_picker
     from ..boards.pin_board import PinBoard
+    from ..boards.progress_board import ProgressBoard
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -120,6 +123,24 @@ def run(settings: "Settings") -> None:
     reg = JSONFileRegistry(settings.registry_path, settings.max_slots)
     transport = make_transport(settings.transport)
     board = PinBoard(tg, reg, settings.allowed_chat_id, settings.data_dir, settings.max_slots)
+    # 진행 카운터 보드: busy 슬롯 🟡 N번 작업중 (Xs) 1초 갱신, idle 전환 시 delete.
+    # IMADHD_PROGRESS_BOARD=0 으로 비활성화 가능(기본 활성).
+    prog = None
+    if os.environ.get("IMADHD_PROGRESS_BOARD", "1") != "0":
+        prog = ProgressBoard(tg, settings.allowed_chat_id)
+        prog_stop = threading.Event()
+
+        def _progress_loop() -> None:
+            while not prog_stop.is_set():
+                try:
+                    prog.sync(reg.active())
+                except Exception as e:
+                    log.warning("progress sync err: %s", e)
+                prog_stop.wait(1.0)
+            prog.clear()
+
+        threading.Thread(target=_progress_loop, daemon=True, name="imadhd-progress").start()
+        log.info("progress board enabled")
     # 매칭 순서 주의: InjectCommand(번호/슬래시N) 는 가장 관대 → 마지막.
     # /list /pin /new /open /close /stop /help 전용 핸들러가 먼저 매칭되도록 앞에 둠.
     commands = [
