@@ -53,13 +53,13 @@ def test_pipe_success(monkeypatch):
 
     monkeypatch.setattr(t, "_pipe_write", fake_pipe_write)
 
-    result = t.inject({"number": 3}, "hello\nworld")
+    result = t.inject({"host_pid": 3}, "hello\nworld")
 
     assert result.delivered is True
     assert result.method == "pipe"
     assert result.note.startswith("named pipe")
     # payload: text 내 \n → space 치환 + 끝에 \n append
-    assert writes == [(r"\\.\pipe\imadhd-slot-3", b"hello world\n")]
+    assert writes == [(r"\\.\pipe\imadhd-stdin-3", b"hello world\n")]
     # 폴백 미호출
     assert fake.inject_calls == []
 
@@ -76,7 +76,7 @@ def test_pipe_raise_falls_back(monkeypatch):
 
     monkeypatch.setattr(t, "_pipe_write", boom)
 
-    target = {"number": 3, "hwnd": 12345}
+    target = {"host_pid": 3, "hwnd": 12345}
     result = t.inject(target, "hello")
 
     # 폴백 호출 — 동일 target/text/background
@@ -93,7 +93,7 @@ def test_pipe_false_falls_back(monkeypatch):
     t, fake = _new_with_fake_fallback()
     monkeypatch.setattr(t, "_pipe_write", lambda p, d: False)
 
-    result = t.inject({"number": 5}, "x")
+    result = t.inject({"host_pid": 5}, "x")
 
     assert result.method.startswith("fallback:")
     assert len(fake.inject_calls) == 1
@@ -125,7 +125,7 @@ def test_is_alive_delegates():
     t, fake = _new_with_fake_fallback()
     fake.is_alive_ret = True
 
-    target = {"number": 1, "pid": 100}
+    target = {"host_pid": 1, "pid": 100}
     out = t.is_alive(target)
 
     assert out is True
@@ -138,7 +138,7 @@ def test_is_alive_delegates():
 def test_send_key_delegates():
     t, fake = _new_with_fake_fallback()
 
-    target = {"number": 1, "hwnd": 999}
+    target = {"host_pid": 1, "hwnd": 999}
     out = t.send_key(target, 0x1B)
 
     assert out.method == "focus-vk"
@@ -155,8 +155,8 @@ def test_utf8_payload(monkeypatch):
     monkeypatch.setattr(t, "_pipe_write",
                         lambda p, d: writes.append((p, d)) or True)
 
-    t.inject({"number": 7}, "안녕\n클로이")
+    t.inject({"host_pid": 7}, "안녕\n클로이")
 
     path, data = writes[0]
-    assert path == r"\\.\pipe\imadhd-slot-7"
+    assert path == r"\\.\pipe\imadhd-stdin-7"
     assert data == "안녕 클로이\n".encode("utf-8")

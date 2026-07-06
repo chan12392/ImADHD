@@ -2,8 +2,12 @@
 
 완전히 격리된 서브프로세스 테스트:
   - 실제 claude/telegram 없이 줄-에코 더미 자식으로 host 를 spawn.
-  - `--slot N` 으로 결정론적 slot 고정 → 네임드파이프 클라이언트로 주입.
+  - 더미 자식이 IMADHD_HOST_PID 배너(자식 env 에서 읽은 host.py pid) 출력.
+  - 테스트가 그 host_pid 로 파이프 이름(imadhd-stdin-<host_pid>) 을 구성해 주입.
   - 자식 exit 후 host 도 정상 종료(행업 없음) 검증.
+
+B-근본(2026-07-06): 파이프 이름이 slot 이 아니라 host.py 프로세스 pid.
+고정 PIPE_NAME 상수 대신 배너에서 읽은 host_pid 로 동적 구성.
 
 Windows 전용(pywinpty + pywin32). 다른 플랫폼은 스킵.
 """
@@ -36,14 +40,11 @@ except ImportError:
 
 # ── Test fixtures ───────────────────────────────────────────────────
 
-# 높은 slot 번호 — 실제 라우터/레지스트리 슬롯(1..6)과 충돌 회피.
-SLOT = 7
-PIPE_NAME = f"\\\\.\\pipe\\imadhd-slot-{SLOT}"
-
-# 더미 자식: banner 로 IMADHD_WANT_SLOT 출력 → 줄 단위 에코 → QUIT 입력 시 종료.
+# 더미 자식: banner 로 IMADHD_HOST_PID 출력 → 줄 단위 에코 → QUIT 입력 시 종료.
+# host.py 가 자식 env 에 IMADHD_HOST_PID=<os.getpid()> 를 주입하므로 자식이 읽어 출력.
 DUMMY_CHILD = (
     "import sys, os\n"
-    "sys.stdout.write('WANT_SLOT=' + (os.environ.get('IMADHD_WANT_SLOT') or '') + '\\n')\n"
+    "sys.stdout.write('HOST_PID=' + (os.environ.get('IMADHD_HOST_PID') or '') + '\\n')\n"
     "sys.stdout.flush()\n"
     "while True:\n"
     "    line = sys.stdin.readline()\n"
@@ -54,6 +55,11 @@ DUMMY_CHILD = (
 )
 
 
+def _pipe_name_for(host_pid: int) -> str:
+    """host_pid → 파이프 경로. host.py 의 NAMED_PIPE_PREFIX 와 일치해야 함."""
+    return f"\\\\.\\pipe\\imadhd-stdin-{host_pid}"
+
+
 def _repo_root() -> str:
     # tests/ 의 부모 디렉토리 = repo root.
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -62,13 +68,12 @@ def _repo_root() -> str:
 def _spawn_host():
     """host 를 더미 자식과 함께 서브프로세스로 기동."""
     env = dict(os.environ)
-    # host 가 Settings.load() 를 시도하지 않도록(--slot 명시) 토큰 불필요.
-    # 다만 IMADHD_WANT_SLOT 은 host 가 자식에게 주입하므로 여기서 비워둘 것.
+    # host 가 자식에게 IMADHD_HOST_PID 를 주입하므로 부모 env 잔재는 비움.
+    env.pop("IMADHD_HOST_PID", None)
     env.pop("IMADHD_WANT_SLOT", None)
     return subprocess.Popen(
         [
             sys.executable, "-u", "-m", "imadhd.host",
-            "--slot", str(SLOT),
             "--",
             sys.executable, "-u", "-c", DUMMY_CHILD,
         ],
@@ -80,13 +85,13 @@ def _spawn_host():
     )
 
 
-def _wait_pipe_connectable(timeout: float = 10.0):
+def _wait_pipe_connectable(pipe_name: str, timeout: float = 10.0):
     """네임드파이프가 클라이언트로 연결 가능해질 때까지 재시도. 핸들 또는 None."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             handle = win32file.CreateFile(
-                PIPE_NAME,
+                pipe_name,
                 win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                 0,
                 None,
@@ -130,14 +135,21 @@ def test_import_clean():
 def test_host_pipe_inject_and_env():
     proc = _spawn_host()
     try:
-        # 1) 더미 자식 배너(WANT_SLOT=N) 대기
-        banner = _read_until(proc.stdout, lambda l: b"WANT_SLOT=" in l, timeout=15)
-        assert any(b"WANT_SLOT=7" in l for l in banner), \
-            f"IMADHD_WANT_SLOT 배너 누락: {banner!r}"
+        # 1) 더미 자식 배너(HOST_PID=N) 대기 → host_pid 동적 획득
+        banner = _read_until(proc.stdout, lambda l: b"HOST_PID=" in l, timeout=15)
+        host_pid_str = None
+        for l in banner:
+            if b"HOST_PID=" in l:
+                host_pid_str = l.split(b"HOST_PID=", 1)[1].strip()
+                break
+        assert host_pid_str and host_pid_str.isdigit(), \
+            f"IMADHD_HOST_PID 배너 누락/비정수: {banner!r}"
+        host_pid = int(host_pid_str)
+        pipe_name = _pipe_name_for(host_pid)
 
         # 2) 네임드파이프가 클라이언트로 연결 가능해질 때까지 대기
-        handle = _wait_pipe_connectable(timeout=10)
-        assert handle is not None, "파이프가 제때 열리지 않음"
+        handle = _wait_pipe_connectable(pipe_name, timeout=10)
+        assert handle is not None, f"파이프가 제때 열리지 않음: {pipe_name}"
 
         # 3) 주입: b"hello world\n" → host 가 "hello world\r" 을 PTY 에 기록
         #    → 더미 자식이 "ECHO hello world\n" 출력 → host stdout 으로 전달
@@ -151,7 +163,7 @@ def test_host_pipe_inject_and_env():
             f"ECHO 줄 누락: {echoed!r}"
 
         # 4) 더미 자식 종료(QUIT 주입) → 자식 exit → host 도 같이 종료되어야 함
-        handle2 = _wait_pipe_connectable(timeout=5)
+        handle2 = _wait_pipe_connectable(pipe_name, timeout=5)
         assert handle2 is not None, "두 번째 연결 실패(멀티커넥트 서버 아님?)"
         try:
             win32file.WriteFile(handle2, b"QUIT\n")
@@ -180,22 +192,24 @@ def test_host_pipe_inject_and_env():
                 proc.wait(timeout=5)
 
 
-def test_parse_args_defaults_and_slot():
+def test_parse_args_defaults():
     from imadhd.host import parse_args
-    # 인자 없음 → (None, ['claude'])
-    assert parse_args([]) == (None, ["claude"])
-    # --slot N -- cmd args
-    assert parse_args(["--slot", "3", "--", "foo", "bar"]) == (3, ["foo", "bar"])
-    # --slot=N 형태
-    assert parse_args(["--slot=5", "--", "x"]) == (5, ["x"])
-    # -- 없이 child args
-    assert parse_args(["--slot", "2", "mycmd"]) == (2, ["mycmd"])
-    # --slot 없이 child args 만
-    assert parse_args(["only"]) == (None, ["only"])
+    # 인자 없음 → (slot_or_None, ['claude']). slot 은 이제 미사용이지만
+    # parse_args 시그니처 호환성 유지.
+    parsed = parse_args([])
+    assert parsed[1] == ["claude"]
+    # child args 전달
+    assert parse_args(["--", "foo", "bar"])[1] == ["foo", "bar"]
+    assert parse_args(["only"])[1] == ["only"]
 
 
-def test_build_env_sets_want_slot(monkeypatch):
+def test_build_env_sets_host_pid(monkeypatch):
+    """_build_env_string() 이 IMADHD_HOST_PID(=os.getpid()) 를 주입하고
+    IMADHD_WANT_SLOT 잔재를 제거하는지 검증."""
     from imadhd.host import _build_env_string
-    blob = _build_env_string(7)
+    blob = _build_env_string()
     pairs = dict(p.split("=", 1) for p in blob.split("\0") if "=" in p and p)
-    assert pairs.get("IMADHD_WANT_SLOT") == "7"
+    # _build_env_string 을 호출한 프로세스(=테스트 프로세스)의 pid 와 일치.
+    assert pairs.get("IMADHD_HOST_PID") == str(os.getpid())
+    # WANT_SLOT 잔재 제거(불일치 방지).
+    assert "IMADHD_WANT_SLOT" not in pairs

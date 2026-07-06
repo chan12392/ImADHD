@@ -57,7 +57,7 @@ FILE_SHARE_WRITE = 0x00000002
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 PIPE_BUF = 4096
-NAMED_PIPE_PREFIX = r"\\.\pipe\imadhd-slot-"
+NAMED_PIPE_PREFIX = r"\\.\pipe\imadhd-stdin-"
 
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 30
@@ -306,17 +306,25 @@ def _resolve_child(child_argv: list[str]) -> list[str]:
     return [resolved, *child_argv[1:]]
 
 
-def _build_env_string(want_slot: int) -> str:
-    """CreateProcessW env blob: 'KEY=VALUE\\0...\\0'. IMADHD_WANT_SLOT 강제 주입."""
+def _build_env_string() -> str:
+    """CreateProcessW env blob: 'KEY=VALUE\\0...\\0'. IMADHD_HOST_PID 주입.
+
+    B-근본: 파이프 이름 imadhd-stdin-<host_pid>. host.py 자기 pid(os.getpid())를
+    자식 CC env 에 주입 → register_hook 이 읽어 registry 에 저장 → router 가
+    그 pid 로 파이프 주입. ppid 체인 불필요(CC 가 cmd→node→claude 다단계 자식).
+    WANT_SLOT(slot 고정)은 폐지 — slot 은 register_hook 이 lowest_free 로 할당,
+    host.py 는 slot 을 모름(불일치·좀비 경쟁 원인 제거).
+    """
     env = dict(os.environ)
-    env["IMADHD_WANT_SLOT"] = str(want_slot)
+    env["IMADHD_HOST_PID"] = str(os.getpid())
+    env.pop("IMADHD_WANT_SLOT", None)  # 상속 잔재 제거(불일치 방지).
     return "\0".join(f"{k}={v}" for k, v in env.items()) + "\0"
 
 
 # ────────────────────────── Named-pipe server ──────────────────────────
 
-def _make_pipe_instance(slot: int):
-    name = f"{NAMED_PIPE_PREFIX}{slot}"
+def _make_pipe_instance(host_pid: int):
+    name = f"{NAMED_PIPE_PREFIX}{host_pid}"
     handle = win32pipe.CreateNamedPipe(
         name,
         win32pipe.PIPE_ACCESS_DUPLEX,
@@ -340,7 +348,7 @@ def _write_record(pty, payload: bytes) -> None:
         pass
 
 
-def pipe_server_loop(slot: int, pty, stop_event: threading.Event) -> None:
+def pipe_server_loop(host_pid: int, pty, stop_event: threading.Event) -> None:
     """네임드파이프 서버 메인 루프.
 
     라우터는 inject 마다 open→write→close 한다(1회성 연결). 그래서 서버도
@@ -349,20 +357,20 @@ def pipe_server_loop(slot: int, pty, stop_event: threading.Event) -> None:
     """
     while not stop_event.is_set():
         try:
-            name, handle = _make_pipe_instance(slot)
+            name, handle = _make_pipe_instance(host_pid)
         except Exception as e:
-            _host_log(f"pipe create FAILED slot={slot} err={e!r}")
+            _host_log(f"pipe create FAILED host_pid={host_pid} err={e!r}")
             return
-        _host_log(f"pipe OK slot={slot} name={name} pre-connect")
+        _host_log(f"pipe OK host_pid={host_pid} name={name} pre-connect")
         connected = False
         try:
             win32pipe.ConnectNamedPipe(handle, None)
             connected = True
-            _host_log(f"pipe CONNECTED slot={slot} client arrived")
+            _host_log(f"pipe CONNECTED host_pid={host_pid} client arrived")
         except pywintypes.error as e:
-            _host_log(f"pipe connect winerr slot={slot} winerror={e.winerror} str={e.strerror}")
+            _host_log(f"pipe connect winerr host_pid={host_pid} winerror={e.winerror} str={e.strerror}")
         except Exception as e:
-            _host_log(f"pipe connect UNCAUGHT slot={slot} type={type(e).__name__} err={e!r}")
+            _host_log(f"pipe connect UNCAUGHT host_pid={host_pid} type={type(e).__name__} err={e!r}")
         if not connected:
             try:
                 win32file.CloseHandle(handle)
@@ -537,7 +545,9 @@ def main() -> int:
     slot_arg, child_argv = parse_args(sys.argv[1:])
     # claude → cmd.exe /c claude.CMD (CreateProcessW .cmd 직접실행 불가)
     child_argv = _resolve_child(child_argv)
-    slot = slot_arg if slot_arg is not None else predict_slot()
+    # B-근본: slot 인자/predict 폐지. 파이프 이름 = imadhd-stdin-<host_pid>.
+    # slot 은 register_hook 이 lowest_free 로 할당(host.py 모름 → 불일치 제거).
+    host_pid = os.getpid()
 
     cols, rows = get_console_size()
 
@@ -549,7 +559,7 @@ def main() -> int:
 
     enable_vt_output()
 
-    env_str = _build_env_string(slot)
+    env_str = _build_env_string()
     cwd = os.getcwd()
 
     pty = winpty.PTY(cols, rows)
@@ -569,12 +579,12 @@ def main() -> int:
         sys.stderr.write("host: pty.spawn returned False\n")
         return 2
 
-    _host_log(f"host start slot={slot} child={child_argv[:2]} spawned ok")
+    _host_log(f"host start host_pid={host_pid} child={child_argv[:2]} spawned ok")
 
     stop_event = threading.Event()
     # pipe server thread — daemon: 프로세스 종료 시 같이 죽음(ConnectNamedPipe 블록 회피).
     threading.Thread(
-        target=pipe_server_loop, args=(slot, pty, stop_event), daemon=True
+        target=pipe_server_loop, args=(host_pid, pty, stop_event), daemon=True
     ).start()
     # keyboard thread — daemon: 자식 종료 후 프로세스 종료 시 같이 죽음.
     threading.Thread(

@@ -246,8 +246,21 @@ def main() -> int:
         except ValueError:
             want_slot = None
 
+    # host PTY-bridge 가 자식 env 에 IMADHD_HOST_PID=<host.py pid> 를 주입해둔다.
+    # 파이프 이름 imadhd-stdin-<host_pid> 로 주입(B-근본 pid 기반). ppid 체인 불필요
+    # — CC 가 cmd.exe→node→claude.exe 다단계 자식이라 ppid 로 host.py 못 찾음.
+    # env 상속은 검증된 패턴(WANT_SLOT 과 동일).
+    host_pid_raw = os.environ.get("IMADHD_HOST_PID", "").strip()
+    host_pid: int = 0
+    if host_pid_raw:
+        try:
+            host_pid = int(host_pid_raw)
+        except ValueError:
+            host_pid = 0
+
     num = reg.claim_slot(session_id, hwnd, pid, cwd, started,
-                         tmux_pane=tmux_pane, force_slot=want_slot)
+                         tmux_pane=tmux_pane, force_slot=want_slot,
+                         host_pid=host_pid)
     tg = TelegramClient(s.bot_token, s.offset_path, s.allowed_chat_id)
 
     # 연결 성공 알림은 채팅이 지저분해져 생략(/list 로 언제든 확인 가능).

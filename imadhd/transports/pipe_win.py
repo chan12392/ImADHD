@@ -126,12 +126,14 @@ class PipeWinTransport(Transport):
             kernel32.CloseHandle(handle)
 
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
-        N = target.get("number")
-        if N is None:
-            # number 키 없음 = 래핑 안 된 구버전 슬롯. 바로 폴백.
+        # B-근본: 파이프 이름 = imadhd-stdin-<host_pid> (slot 아님). host_pid 는
+        # host.py 프로세스 고유 → slot 불일치/좀비 경쟁 원천 제거. host_pid=0/없음 =
+        # 래핑 없는 직접 CC(sendkeys 폴백). target["host_pid"] = SessionInfo.host_pid.
+        host_pid = target.get("host_pid") or 0
+        if not host_pid:
             return self._fallback_inject(target, text, background)
 
-        pipe_path = fr"\\.\pipe\imadhd-slot-{N}"
+        pipe_path = fr"\\.\pipe\imadhd-stdin-{host_pid}"
         # \n/\r → space (CC 터미널 조기 submit 방지. sendkeys 정책과 동일).
         payload = text.replace("\r", " ").replace("\n", " ")
         data = payload.encode("utf-8") + b"\n"
