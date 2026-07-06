@@ -22,6 +22,8 @@ HELP_TEXT = (
     "• /use N — N번 터미널 고정(이후 본문 자동 주입, 🎯 표시)\n"
     "• /use off — 고정 해제\n"
     "• /doctor — 진단(라우터·훅·pm2·봇 메뉴)\n"
+    "• /update — 활성 CC에 !claude update 주입\n"
+    "• /update-adhd — ImADHD 갱신(git pull+pytest+restart)\n"
     "• /pin — 상태 보드 핀 새로고침\n"
     "• /help — 이 도움말\n"
     "\n"

@@ -5,6 +5,8 @@ plain 폴백도 길이가 그대로라 재실패 → 회신이 유실된다(2026
 send() 는 모든 청크의 message_id 리스트를 반환 — reply_hook 이 각 청크를
 같은 슬롯에 매핑(2026-07-06).
 """
+import pytest
+
 from imadhd.telegram_api.client import TelegramClient, MAX_TG_TEXT
 
 
@@ -65,3 +67,34 @@ def test_send_returns_all_chunk_message_ids():
 def test_send_returns_empty_list_for_empty_chat():
     ids = TelegramClient("t", "/tmp/x.txt", "1").send("", "x")
     assert ids == []
+
+
+def test_download_file_writes_bytes_and_creates_parent(monkeypatch, tmp_path):
+    """TG→CC 이미지 수신: getFile → 다운로드 → 부모 디렉토리 자동 생성."""
+    import imadhd.telegram_api.client as cli_mod
+    tg = TelegramClient(token="T", offset_path=tmp_path / "off.txt", allowed_chat_id=None)
+    tg._api = lambda method, data=None, timeout=30: {"result": {"file_path": "photos/file.jpg"}}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b"JPEGBYTES"
+
+    monkeypatch.setattr(cli_mod.urllib.request, "urlopen",
+                        lambda req, timeout=60: FakeResp())
+    dest = tmp_path / "inbox" / "tg_123.jpg"   # 부모 미존재 → 자동 생성 검증
+    p = tg.download_file("fid_abc", dest)
+    assert p == dest
+    assert dest.read_bytes() == b"JPEGBYTES"
+    assert dest.parent.exists()
+
+
+def test_download_file_missing_file_path_raises(monkeypatch, tmp_path):
+    """getFile 응답에 file_path 없으면 RuntimeError(fail-loud)."""
+    tg = TelegramClient(token="T", offset_path=tmp_path / "off.txt", allowed_chat_id=None)
+    tg._api = lambda method, data=None, timeout=30: {"result": {}}
+    with pytest.raises(RuntimeError):
+        tg.download_file("fid", tmp_path / "x.jpg")
