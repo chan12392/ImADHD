@@ -25,6 +25,7 @@ class Settings:
     transport: str
     reply_marker: str
     allow_any_chat: bool = False  # dev 전용: 모든 chat 허용(IMADHD_ALLOW_ANY_CHAT=1). 공개 봇 금지.
+    route_all_asks: bool = True   # 터미널 직접 세션의 AskUserQuestion 도 텔레그램 inline 버튼으로(IMADHD_ROUTE_ALL_ASKS=0 으로 끔).
 
     @classmethod
     def load(cls, env_path: str | os.PathLike | None = None) -> "Settings":
@@ -70,6 +71,11 @@ class Settings:
                 "or set IMADHD_ALLOW_ANY_CHAT=1 for local dev only."
             )
 
+        # IMADHD_ROUTE_ALL_ASKS: 기본 True(빈/미지정). 명시적 off(0/false/no/off)만 False.
+        # 터미널 직접 작업 세션의 AskUserQuestion 도 텔레그램 inline 버튼으로 라우팅.
+        rae = os.environ.get("IMADHD_ROUTE_ALL_ASKS", "").strip().lower()
+        route_all_asks = rae not in {"0", "false", "no", "off"}
+
         return cls(
             bot_token=token,
             allowed_chat_id=allowed,
@@ -78,6 +84,7 @@ class Settings:
             transport=os.environ.get("IMADHD_TRANSPORT", "sendkeys_win").strip() or "sendkeys_win",
             reply_marker=os.environ.get("IMADHD_REPLY_MARKER", "[A.D.H.D]").strip() or "[A.D.H.D]",
             allow_any_chat=allow_any,
+            route_all_asks=route_all_asks,
         )
 
     # 편의 경로
