@@ -106,6 +106,10 @@ def adhd_main() -> int:
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "router"
+    # 2026-07-07 실사고(409 Conflict): "ask" 매핑 누락 → `python -m imadhd.cli ask`
+    # 가 router_main 으로 fallback → router 2번째 인스턴스가 같은 봇 폴링 → 텔레그램
+    # 1폴러 제한 위반 409. ask_main 은 PreToolUse 훅(stdin 대기, telegram 폴링 X)이라
+    # 매핑해두면 잘못된 standalone 실행이 router 중복을 낳지 않는다.
     sys.exit({"router": router_main, "register": register_main, "reply": reply_main,
-              "adhd": adhd_main, "install": install_main, "uninstall": uninstall_main,
-              "watchdog": watchdog_main}.get(cmd, router_main)())
+              "ask": ask_main, "adhd": adhd_main, "install": install_main,
+              "uninstall": uninstall_main, "watchdog": watchdog_main}.get(cmd, router_main)())
