@@ -103,10 +103,12 @@ def _is_valid_handle(h) -> bool:
 
 
 def _host_log(msg: str) -> None:
-    """PoC 진단용 로그. ~/.imadhd(라이브 상태) 말고 repo 루트에 쓴다."""
+    """PoC 진단용 로그. repo 루트 말고 ~/.imadhd(repo 밖) 에 쓴다.
+    repo 루트에 두면 repo 압축/공유 시 진단 데이터가 함께 노출(2026-07-07 B#8)."""
     try:
         from pathlib import Path
-        p = Path(__file__).resolve().parent.parent / "_host_diag.log"
+        p = Path.home() / ".imadhd" / "host.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
         with p.open("a", encoding="utf-8") as f:
             f.write(msg + "\n")
     except Exception:
@@ -356,8 +358,11 @@ def _write_record(pty, payload: bytes) -> None:
                 time.sleep(0.015)
             time.sleep(0.08)
             pty.write("\r")
-    except Exception:
-        pass
+    except Exception as e:
+        # PTY 죽음/인코딩 실패 등을 조용히 삼키면 라우터는 delivered 로 오인하고
+        # 대표님은 "주입했는데 반응 없음" 상태에 갇힌다. 최소한 진단 로그 남긴다
+        # (2026-07-07 감사 P0 — 기존 except: pass 는 원인 추적 불가).
+        _host_log(f"_write_record FAILED pty_alive={pty.isalive()} err={e!r}")
 
 
 def pipe_server_loop(host_pid: int, pty, stop_event: threading.Event) -> None:
@@ -410,8 +415,10 @@ def pipe_server_loop(host_pid: int, pty, stop_event: threading.Event) -> None:
             # 후행 '\n' 없이 클라이언트가 닫힌 경우: 남은 buf 도 한 레코드로 처리.
             if buf:
                 _write_record(pty, buf)
-        except Exception:
-            pass
+        except Exception as e:
+            # ReadFile 루프 예외(truncated payload 등) 삼킴 → 남은 buf 유실.
+            # 라우터는 이미 보낸 것으로 오인 가능하므로 진단 로그(2026-07-07 감사 P0).
+            _host_log(f"pipe read FAILED host_pid={host_pid} buf_len={len(buf)} err={e!r}")
         finally:
             try:
                 win32file.CloseHandle(handle)
