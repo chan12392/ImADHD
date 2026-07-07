@@ -81,6 +81,8 @@ def _handle_and_capture(monkeypatch, text):
 
     # Windows 분기(subprocess.Popen) 검증. os.name=nt 고정.
     monkeypatch.setattr(oc.os, "name", "nt")
+    # debounce 모듈 변수 리셋(연속 테스트 시 직전 /open 잔재로 스킵 방지).
+    monkeypatch.setattr(oc, "_LAST_OPEN_MONO", 0.0)
 
     captured = {}
 

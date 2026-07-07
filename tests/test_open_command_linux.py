@@ -17,6 +17,8 @@ class _FakeTelegram:
 def _handle_linux(monkeypatch, text, fixed_time=1783300000):
     monkeypatch.setattr(oc.os, "name", "posix")
     monkeypatch.setattr(oc.time, "time", lambda: fixed_time)
+    # debounce 모듈 변수 리셋(연속 테스트 시 직전 /open 잔재로 스킵 방지).
+    monkeypatch.setattr(oc, "_LAST_OPEN_MONO", 0.0)
     captured = {}
 
     def fake_run(args, **kwargs):
