@@ -139,6 +139,11 @@ def _paste_inject(target: str, text: str) -> bool:
     호출자가 idle 상태를 보장한 뒤에만 호출할 것."""
     clean = text.replace("\r", " ").replace("\n", " ")
     try:
+        # paste 직전 idle 재확인: _wait_idle 이 idle 을 반환한 뒤에도 CC 가
+        # 곧바로 busy(응답개시) 로 전환하는 race 가 있다. 그 구간에 paste 하면
+        # 텍스트가 무시/잔류하므로 한 프레임 더 검증해 안정화한다.
+        if _state(target) != "idle":
+            return False
         rb = _run(["tmux", "load-buffer", "-"], input_text=clean)
         if rb.returncode != 0:
             return False
@@ -146,13 +151,17 @@ def _paste_inject(target: str, text: str) -> bool:
         time.sleep(0.2)
         if _state(target) != "stuck":
             return False  # 입력창에 안 들어감
-        for _ in range(3):
-            _run(["tmux", "send-keys", "-t", target, "Enter"])
+        # 2026-07-07 실측(오라클 chleo stuck 사고): CC TUI 가 Enter(C-m) submit
+        # 을 간헐적으로 무시하고 C-j(LF) 만 인식하는 케이스가 있다. _wait_idle
+        # 에는 Enter→C-j 폴백이 있었으나 _paste_inject(실제 주입 경로)에는
+        # Enter 3회만 있어 C-j 가 누락 → 텍스트 stuck → 응답 지연("한박자 늦음"
+        # 근본원인). Enter 와 C-j 를 번갈아 4회 시도한다.
+        for key in ("Enter", "C-j", "Enter", "C-j"):
+            _run(["tmux", "send-keys", "-t", target, key])
             time.sleep(0.25)
-            st = _state(target)
-            if st != "stuck":
+            if _state(target) != "stuck":
                 return True  # busy(제출성공) 또는 그 외 상태 전환
-        return False  # 3회 시도해도 잔류
+        return False  # 4회 시도해도 잔류
     except Exception:
         return False
 
