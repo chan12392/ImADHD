@@ -1,9 +1,9 @@
 """회신 캡처 전략 (회신 대상 턴 = 전체 assistant 답변 회신).
 
 회신 여부/본문은 더 이상 마커([A.D.H.D])에 의존하지 않는다:
-  - 회신 여부: reply_hook 이 marker_pending 플래그(inject 시점 세팅)로
-    "이 턴은 텔레그램 인입이었다"를 판정. 거기에 길이 게이트(1200자)가
-    짧게 다시 쓰기를 1회 요청할 수 있다.
+  - 회신 여부: reply_hook 이 transcript 의 assistant 답 uuid dedup 로
+    판정(이미 보낸 uuid 면 skip). 마커/marker_pending 플래그는 미사용.
+    거기에 길이 게이트(1200자)가 짧게 다시 쓰기를 1회 요청할 수 있다.
   - 회신 본문: assistant 답변 전체(마커 잘라내기 없음). CC가 마커를
     출력하지 않으니 회신에 표식이 섞이지 않는다.
 
