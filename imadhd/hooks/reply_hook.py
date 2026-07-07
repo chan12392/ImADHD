@@ -32,10 +32,6 @@ def _mask_token(s) -> str:
 TRANSCRIPT_RETRY_SEC = 8.0
 TRANSCRIPT_RETRY_INTERVAL_SEC = 0.2
 
-# marker_pending 플래그 유효기간(초). 이보다 오래된 파일은 죽은 세션의
-# 잔재로 간주하고 무시+삭제(무한 누적 방지).
-MARKER_PENDING_TTL_SEC = 3600.0
-
 # 텔레그램 회신 길이 게이트(대표님 mem0 선호: 700자 이하 권장, 1200자 최대).
 # HARD 초과 + 회신대상턴 + 재시도 아님 → 1회 block("짧게 다시").
 # stop_hook_active(재시도)면 포기하고 전체 전송(길어도 청크분할로 감당).
@@ -164,36 +160,52 @@ def reply_too_long(text: str, limit: int = REPLY_HARD_LIMIT) -> bool:
     return len(text or "") > limit
 
 
-def _marker_pending_path(data_dir, session_id: str) -> Path:
-    return Path(data_dir) / "marker_pending" / session_id
+def _last_assistant_uuid(entries: list) -> str:
+    """마지막 assistant(텍스트 있는) entry 의 uuid. 중복 회신 dedup 키.
+    text 도구(tool_use만) entry 는 건너뛴다 — 답 본문이 있는 턴의 uuid 가 필요."""
+    for entry in reversed(entries):
+        msg = entry.get("message") or entry
+        if msg.get("role") != "assistant":
+            continue
+        if _extract_text(_get_content(entry)).strip():
+            return str(entry.get("uuid") or "")
+    return ""
 
 
-def has_marker_pending(data_dir, session_id: str) -> bool:
-    """inject_command.mark_marker_pending 이 남긴 플래그 확인.
+def _sent_uuid_path(data_dir, session_id: str) -> Path:
+    return Path(data_dir) / "sent_uuids" / session_id
 
-    transcript 를 못 읽어도(cold-start flush 지연) "이 세션은 텔레그램
-    inject 로 시작된 마커 턴"이라는 사실 자체는 이 파일로 독립적으로
-    안다 — 2026-07-05 실사고(session=0d38e2b2) 재발 방지."""
-    if not session_id:
+
+def _already_sent(data_dir, session_id: str, uuid: str) -> bool:
+    """이미 텔레그램에 보낸 assistant uuid 인지. 같은 답 Stop 중복 발화 방지."""
+    if not uuid or not session_id:
         return False
-    p = _marker_pending_path(data_dir, session_id)
+    p = _sent_uuid_path(data_dir, session_id)
     try:
         if not p.exists():
             return False
-        age = time.time() - float(p.read_text(encoding="utf-8").strip() or "0")
-        if age > MARKER_PENDING_TTL_SEC:
-            p.unlink(missing_ok=True)
-            return False
-        return True
+        return uuid in p.read_text(encoding="utf-8").splitlines()
     except Exception:
         return False
 
 
-def clear_marker_pending(data_dir, session_id: str) -> None:
-    if not session_id:
+def _mark_sent(data_dir, session_id: str, uuid: str) -> None:
+    """회신 완료한 uuid 기록(append). 파일 무한증가 방지 = 최근 500개만 유지."""
+    if not uuid or not session_id:
         return
     try:
-        _marker_pending_path(data_dir, session_id).unlink(missing_ok=True)
+        p = _sent_uuid_path(data_dir, session_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lines = []
+        if p.exists():
+            lines = p.read_text(encoding="utf-8").splitlines()
+        lines.append(uuid)
+        # 최근 500개 유지(오래된 회신 기록 만료 — 세션 길어져도 파일 폭증 방지)
+        if len(lines) > 500:
+            lines = lines[-500:]
+        tmp = p.with_name(p.name + ".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        tmp.replace(p)
     except Exception:
         pass
 
@@ -308,41 +320,28 @@ def main() -> int:
     else:
         _debug_log(f"[reply] no registry match session={session_id[:8]}")
 
-    # 회신 대상 턴 = 텔레그램 inject 로 시작(inject가 pending 세팅). 레거시
-    # user_text 마커(구버전 inject가 붙이던 [A.D.H.D])도 보조 신호로 인정.
-    # 마커 echo 여부는 회신 조건에서 완전 제거 — CC가 터미널 직접 타이핑에
-    # 마커를 과잉 출력해도(2026-07-06 session=c4f60955 실측) 텔레그램로 새어
-    # 나가지 않는다. CC는 텔레그램 인입 사실을 모른다(프롬프트에 표식 無).
+    # 2026-07-07 대표님 단순화: 회신 = 1:1 파이프. CC 답 1개 → TG 1회신.
+    # marker/count/pending 판정 전부 폐지 — 메시지 개수 ≠ CC 답 개수(CC가 빠른 연속
+    # 메시지를 한 턴으로 묶음 처리) + Stop 훅 중복 발화(tool_use 후) 로
+    # off-by-one/중복/유실이 혼재. uuid dedup 만으로: 마지막 assistant 답(uuid)이 이미
+    # 텔레그램에 갔으면 skip, 아니면 sent + 기록. 직접 타이핑 턴도 회신(Linux 배포는
+    # 텔레그램 브릿지 전용 — CC 터미널 직접 작업 안 함).
     entries = _read_entries(transcript_path)
-    user_text = last_user_text_from_entries(entries)
-    pending_flag = has_marker_pending(s.data_dir, session_id)
-    is_marker_turn = (s.reply_marker in user_text) or pending_flag
+    last_uuid = _last_assistant_uuid(entries)
     too_long = reply_too_long(text)
     images = _last_assistant_images(entries)
     _debug_log(
         f"[reply] session={session_id[:8]} text_len={len(text)} "
-        f"too_long={too_long} is_marker_turn={is_marker_turn} "
-        f"pending={pending_flag} stop_hook_active={stop_hook_active} "
-        f"images={len(images)}"
+        f"uuid={last_uuid[:8] or '-'} too_long={too_long} "
+        f"stop_hook_active={stop_hook_active} images={len(images)}"
     )
-    # 직접 타이핑 턴 — 회신도 block 도 안 함(idle 복귀는 위에서 마커 무관 처리).
-    if not is_marker_turn:
-        _debug_log(f"[reply] direct-typing turn, suppress reply+block session={session_id[:8]}")
-        return 0
     if not text and not images:
-        _debug_log(f"[reply] marker turn but no assistant text/image session={session_id[:8]}")
-        clear_marker_pending(s.data_dir, session_id)
+        _debug_log(f"[reply] no assistant text/image session={session_id[:8]}")
         return 0
-    # 길이 게이트 폐지(2026-07-07 대표님 결정): HARD 초과 block → CC 재작성 루프가
-    # 회신 지연/누락 인상 유발(터미널↔텔레그램 전환 시 특히). 대신 client.send 가
-    # 청크 분할(마크다운/줄바꿈 경계)로 전체 전송 — 누락 방지가 "짧게 강제"보다 우선.
-    # 대표님 mem0 가독성 선호(700/1200)는 CC 프롬프트·청크 크기로 보존(회신 게이트 아님).
-    if too_long:
-        _debug_log(
-            f"[reply] long reply, skip block → chunked send session={session_id[:8]} "
-            f"len={len(text)}"
-        )
-    clear_marker_pending(s.data_dir, session_id)
+    if _already_sent(s.data_dir, session_id, last_uuid):
+        _debug_log(f"[reply] dup uuid={last_uuid[:8]} skip session={session_id[:8]}")
+        return 0
+    _mark_sent(s.data_dir, session_id, last_uuid)
     body = mc.build_text(rp)
 
     if not s.allowed_chat_id:

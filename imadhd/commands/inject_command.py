@@ -39,23 +39,6 @@ def _input_fingerprint(text: str) -> str:
     return f"len={len(text)} sha256={digest}"
 
 
-def mark_marker_pending(data_dir, session_id: str) -> None:
-    """주입 = 항상 회신 대상 턴. reply_hook 이 Stop 시점에 transcript 로만
-    "이 턴이 텔레그램 인입이었는지" 재판정하면 cold-start flush 지연
-    (2026-07-05 실사고: session=0d38e2b2, exists=False 오판 → 회신 유실)에
-    놓친다. 주입 시점에 파일로 미리 남겨 transcript 상태와 무관하게 판정.
-    이름은 레거시(mark_marker_pending)지만 이제 마커 문자열과 무관 —
-    '회신 대상 턴' 플래그."""
-    if not session_id or not data_dir:
-        return
-    try:
-        d = Path(data_dir) / "marker_pending"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / session_id).write_text(str(time.time()), encoding="utf-8")
-    except Exception:
-        pass
-
-
 # 숫자이모지 → 숫자 매핑 (1..6, 여유분 7..9 포함)
 EMOJI_TO_NUM = {
     "1️⃣": 1, "2️⃣": 2, "3️⃣": 3, "4️⃣": 4, "5️⃣": 5, "6️⃣": 6,
@@ -143,13 +126,14 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
     body = _normalize_question(" ".join(body.split()) or "(빈 입력)")
     # CC 프롬프트에 마커/표식 안 붙임 — CC는 텔레그램 인입 사실을 모름.
-    # 회신 결정·길이 교정은 전부 reply_hook(Stop)이 pending 플래그로 처리.
+    # 회신 결정·길이 교정은 전부 reply_hook(Stop)이 transcript uuid dedup 로 처리.
     inject_text = body
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
-    mark_marker_pending(ctx.settings.data_dir, info.session_id)
+
     result = ctx.transport.inject(info.to_dict(), inject_text)
+    method = getattr(result, "method", "?")
     _debug_log(
-        f"[inject-done] num={num} method={getattr(result, 'method', '?')} "
+        f"[inject-done] num={num} method={method} "
         f"delivered={getattr(result, 'delivered', False)} {_input_fingerprint(inject_text)}"
     )
     # transport 가 InjectResult(진짜) 반환 시에만 복구 처리. 테스트 FakeTransport(None) 방어.
