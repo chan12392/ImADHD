@@ -30,9 +30,10 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.3.5` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.6` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
 
 ### What's new
+- **`v0.3.6`** — **PreToolUse hook consolidation (5→4)**: the two `PreToolUse` entries (`ask_hook` for `AskUserQuestion`, `perm_hook` for `Bash|Write|Edit`) merge into one `dispatch_hook` entry that parses stdin once and routes by `tool_name`. No behavior change. Re-running `install` auto-migrates existing installs (scrubs the legacy per-module entries to avoid double-fire). **`/new`(`/clear`) reply/attachment fix**: after `/clear` the CC `session_id` changes but `SessionStart` doesn't re-fire, so the registry stayed pinned to the stale id and reverse replies (`reply_hook`) were dropped ("image not sending"). `busy_hook` (`UserPromptSubmit`) is the first to observe the new `session_id`, so it now self-heals the slot mapping + `marker_pending` by matching on `cwd`.
 - **`v0.3.5`** — **progress board**: each busy slot shows a live `🟡 N번 작업중 (Xs)` counter (1 s refresh, auto-deleted on idle; completion still arrives as a separate reply DM), sent **silently** so it doesn't play a notification sound. Plus `perm_hook` log/input hardening (sha256 fingerprint + `html.escape`) with no behavior change.
 - **`v0.3.4`** — intermittent inject fix: `host.py` now writes the body as **8-char chunks at human-typing cadence** before the submit `Enter`, defeating Claude Code TUI's bracketed-paste detection that occasionally left mid-length messages stuck in the input box.
 - **`v0.3.3`** — **function-button board** (tap `/list`, `/open`, `/close`, `/use`, `/update-adhd`, … instead of typing) + **inline slot picker** popup for `/close /stop /use /new` when ≥2 terminals are active (single active = one-tap run); `/close` now **closes the Windows Terminal tab**; `/update-adhd` shows current/latest version + CHANGELOG and asks **Yes/No** inline before applying.
@@ -78,9 +79,10 @@ you (phone) ──DM "3️⃣ check logs"──▶ Telegram Bot
 | `boards/` | status board (pinned text + ReplyKeyboard) + progress board (per-slot `🟡 작업중` counter) |
 | `hooks/register_hook.py` | CC `SessionStart`: claim a number |
 | `hooks/reply_hook.py` | CC `Stop`: capture + send reply |
-| `hooks/ask_hook.py` | CC `PreToolUse` (`AskUserQuestion`): route clarifying questions to Telegram **inline buttons** |
-| `hooks/perm_hook.py` | CC `PreToolUse` (`Bash\|Write\|Edit`): route **risky tool calls** (rm / `git push` / kill / sudo / ...) to Telegram **Yes/No** — safe tools auto-allow with zero latency; timeout → deny |
-| `hooks/busy_hook.py` | CC `UserPromptSubmit`: mark slot busy |
+| `hooks/dispatch_hook.py` | CC `PreToolUse` (`AskUserQuestion\|Bash\|Write\|Edit`): **single entry** that routes by `tool_name` to `ask_hook` (clarifying questions → Telegram **inline buttons**) or `perm_hook` (**risky tool calls** → Telegram **Yes/No**). Merged from two separate entries — 5→4 hooks, no behavior change |
+| `hooks/ask_hook.py` | `AskUserQuestion` logic (invoked by `dispatch_hook`): inline-button routing |
+| `hooks/perm_hook.py` | `Bash\|Write\|Edit` logic (invoked by `dispatch_hook`): risky-tool Yes/No gate — safe tools auto-allow, timeout → deny |
+| `hooks/busy_hook.py` | CC `UserPromptSubmit`: mark slot busy (+ self-heal session-id drift after `/new`/`/clear`, so replies/attachments still route) |
 
 ## Install
 
@@ -220,17 +222,17 @@ Add to `~/.claude/settings.json`:
     "SessionStart":      [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.register_hook" }] }],
     "Stop":              [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.reply_hook"    }] }],
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.busy_hook"     }] }],
-    "PreToolUse":        [{ "matcher": "AskUserQuestion",
-                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.ask_hook", "timeout": 300000 }] },
-                          { "matcher": "Bash|Write|Edit",
-                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.perm_hook", "timeout": 300000 }] }]
+    "PreToolUse":        [{ "matcher": "AskUserQuestion|Bash|Write|Edit",
+                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.dispatch_hook", "timeout": 300000 }] }]
   }
 }
 ```
 
-The **`PreToolUse` / `AskUserQuestion`** hook makes Claude Code's clarifying questions arrive as **Telegram inline buttons** instead of stalling in the terminal. Tap an option → the answer is fed back to Claude Code and work continues — no phone-to-terminal round-trip. If no answer arrives within the timeout, the question is denied (Claude Code can re-ask). The hook is a no-op fallback (native prompt shown) when `TELEGRAM_ALLOWED_CHAT_ID` isn't configured.
+> **One `PreToolUse` entry, two behaviors.** `dispatch_hook` parses stdin once and routes by `tool_name`: `AskUserQuestion` → clarifying-question inline buttons; `Bash`/`Write`/`Edit` → risky-tool Yes/No gate. (Earlier releases registered `ask_hook` and `perm_hook` as two separate `PreToolUse` entries; re-running install auto-migrates the old entries to the single `dispatch_hook` entry.)
 
-The **`PreToolUse` / `Bash|Write|Edit`** hook (`perm_hook`) routes **risky tool calls** — `rm`, `git push`, `kill`, `sudo`, `drop`, writes to protected dirs, etc. — to a Telegram **Yes/No** before Claude Code runs them. Safe tools (`ls`, `cat`, edits outside protected paths) are auto-allowed with zero added latency. The hook's `permissionDecision: deny` is honored **even under `bypassPermissions`** mode — the hook fires before the permission-mode check, so this is your last-line gate from your phone. Timeout → deny (fail-closed). Terminal-direct turns (no Telegram marker) are skipped so local work is never gated.
+The **`AskUserQuestion`** path makes Claude Code's clarifying questions arrive as **Telegram inline buttons** instead of stalling in the terminal. Tap an option → the answer is fed back to Claude Code and work continues — no phone-to-terminal round-trip. If no answer arrives within the timeout, the question is denied (Claude Code can re-ask). The hook is a no-op fallback (native prompt shown) when `TELEGRAM_ALLOWED_CHAT_ID` isn't configured.
+
+The **`Bash|Write|Edit`** path (`perm_hook`) routes **risky tool calls** — `rm`, `git push`, `kill`, `sudo`, `drop`, writes to protected dirs, etc. — to a Telegram **Yes/No** before Claude Code runs them. Safe tools (`ls`, `cat`, edits outside protected paths) are auto-allowed with zero added latency. The hook's `permissionDecision: deny` is honored **even under `bypassPermissions`** mode — the hook fires before the permission-mode check, so this is your last-line gate from your phone. Timeout → deny (fail-closed). Terminal-direct turns (no Telegram marker) are skipped so local work is never gated.
 
 > **No `CLAUDE.md` rule needed.** Replies are routed by a **pending flag** set at inject time, not by a trailing marker Claude Code has to print. Claude Code stays fully unaware that a turn came from Telegram — no prompt suffix, no marker echo, no behavioral rule to forget.
 

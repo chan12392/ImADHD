@@ -123,7 +123,7 @@ def test_hooks_all_present(tmp_path, monkeypatch):
     hooks = {
         "SessionStart": [{"hooks": [{"command": "python -m imadhd.hooks.register_hook"}]}],
         "Stop": [{"hooks": [{"command": "python -m imadhd.hooks.reply_hook"}]}],
-        "PreToolUse": [{"hooks": [{"command": "python -m imadhd.hooks.ask_hook"}]}],
+        "PreToolUse": [{"hooks": [{"command": "python -m imadhd.hooks.dispatch_hook"}]}],
         "UserPromptSubmit": [{"hooks": [{"command": "python -m imadhd.hooks.busy_hook"}]}],
     }
     (settings_dir / "settings.json").write_text(json.dumps({"hooks": hooks}), encoding="utf-8")

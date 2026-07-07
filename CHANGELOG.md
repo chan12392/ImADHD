@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.6 — 2026-07-07
+- **PreToolUse 훅 병합 (5→4)** — `ask_hook`(`AskUserQuestion`)과 `perm_hook`(`Bash|Write|Edit`) 두 `PreToolUse` 엔트리 → 단일 `dispatch_hook` 엔트리(matcher `AskUserQuestion|Bash|Write|Edit`)로 병합. stdin 1회 파싱 후 `tool_name`으로 분기, 동작 변화 없음. `install` 재실행 시 기존 개별 엔트리를 자동 제거·마이그레이션(더블 발화 충돌 방지). `uninstall`·`/doctor` 동기화.
+- **`/new`(`/clear`) 직후 첨부/회신 누락 수정** — `/clear`는 같은 claude.exe PID 안에서 새 transcript(=새 `session_id`)를 시작하지만 `SessionStart` 훅이 재발화하지 않아 registry 매핑이 stale id에 고정 → 역방향 회신(`reply_hook`)이 slot·marker 조회에 실패해 "전송 안 됨"으로 인식. `busy_hook`(`UserPromptSubmit`)가 new session_id를 가장 먼저 관측하므로 같은 cwd 슬롯을 찾아 session_id와 `marker_pending`을 new로 자가치유. 단일 CC 가정.
+- **검증**: pytest 360 passed.
+
 ## 0.3.5 — 2026-07-07
 - **Progress board (#43)** — while a slot is busy, the router shows a per-slot counter `🟡 N번 작업중 (Xs)`, refreshed every 1 s via `edit_message_text`; when the slot goes idle the counter is auto-deleted. Completion results are still delivered as a separate reply DM, so the counter only reflects "work in progress". Togglable via `IMADHD_PROGRESS_BOARD=0` (default on). Commit `aa7ba22`.
 - **Silent progress messages (#44)** — the counter's initial `send` now uses `disable_notification=True`, so "working" pings arrive without a notification sound (`edit`/`delete` are silent by nature). The message itself still appears. Commit `4a4c48a`.

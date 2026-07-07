@@ -130,3 +130,64 @@ def test_load_settings_parse_fail_scrubs_bad_backup(tmp_path, monkeypatch):
     assert "999:REAL-SECRET" not in bak_text
     assert "111222333" not in bak_text
     assert "<redacted>" in bak_text
+
+
+# ---------- PreToolUse 병합 마이그레이션 (ask+perm → dispatch) ----------
+
+def _ptu_groups(*modules: str) -> list:
+    """PreToolUse 그룹 리스트 생성 — 각 module 별 별도 엔트리(구버전 형태)."""
+    return [
+        {"hooks": [{"type": "command", "command": f'"py" -m {m}'}], "matcher": "X"}
+        for m in modules
+    ]
+
+
+def test_migration_scrubs_legacy_ask_perm_and_adds_dispatch(tmp_path, monkeypatch):
+    """구버전 설치(ask_hook+perm_hook 개별 엔트리) → 재설치 시 제거 + dispatch 1개."""
+    initial = {
+        "hooks": {
+            "PreToolUse": _ptu_groups(
+                "imadhd.hooks.ask_hook", "imadhd.hooks.perm_hook"
+            ),
+        }
+    }
+    out = _run_step3(tmp_path, monkeypatch, initial)
+    ptu = out["hooks"]["PreToolUse"]
+    blob = json.dumps(ptu, ensure_ascii=False)
+    # 구버전 개별 엔트리 제거
+    assert "imadhd.hooks.ask_hook" not in blob
+    assert "imadhd.hooks.perm_hook" not in blob
+    # dispatch 단일 엔트리 추가
+    assert "imadhd.hooks.dispatch_hook" in blob
+    assert blob.count("dispatch_hook") == 1
+
+
+def test_migration_keeps_user_pretooluse_hooks(tmp_path, monkeypatch):
+    """사용자 소유 PreToolUse 훅(비-imadhd)은 스크럽에서 보존."""
+    user_hook = {"hooks": [{"command": "echo my-tool"}], "matcher": "Read"}
+    initial = {
+        "hooks": {
+            "PreToolUse": [
+                user_hook,
+                *_ptu_groups("imadhd.hooks.ask_hook"),
+            ],
+        }
+    }
+    out = _run_step3(tmp_path, monkeypatch, initial)
+    ptu = out["hooks"]["PreToolUse"]
+    # 사용자 훅 보존
+    assert user_hook in ptu
+    # dispatch 추가
+    assert any("dispatch_hook" in json.dumps(g, ensure_ascii=False) for g in ptu)
+
+
+def test_migration_idempotent_dispatch_only(tmp_path, monkeypatch):
+    """이미 dispatch 만 있는 최신 설치 → 재실행 시 변경 없음(중복 추가 금지)."""
+    initial = {
+        "hooks": {
+            "PreToolUse": _ptu_groups("imadhd.hooks.dispatch_hook"),
+        }
+    }
+    out = _run_step3(tmp_path, monkeypatch, initial)
+    blob = json.dumps(out["hooks"]["PreToolUse"], ensure_ascii=False)
+    assert blob.count("dispatch_hook") == 1

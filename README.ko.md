@@ -30,9 +30,10 @@ Windows Terminal이나 Stream Deck 런처를 쓰면서 기존 Claude Code 창을
 ---
 
 ## 상태
-`v0.3.5` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
+`v0.3.6` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
 
 ### 새 소식
+- **`v0.3.6`** — **PreToolUse 훅 통합(5→4)**: 두 `PreToolUse` 엔트리(`AskUserQuestion`용 `ask_hook`, `Bash|Write|Edit`용 `perm_hook`) → stdin을 1회만 파싱하고 `tool_name`으로 분기하는 단일 `dispatch_hook` 엔트리로 병합. 동작 변화 없음. `install` 재실행 시 기존 설치를 자동 마이그레이션(더블 발화 충돌 방지용 레거시 개별 엔트리 스크럽). **`/new`(`/clear`) 직후 회신/첨부 누락 수정**: `/clear` 직후 CC `session_id`가 바뀌지만 `SessionStart` 훅은 재발화하지 않아 registry 매핑이 stale id에 고정 → 역방향 회신(`reply_hook`)이 누락되어("이미지가 안 보내져") 인식됨. `busy_hook`(`UserPromptSubmit`)가 new `session_id`를 가장 먼저 관측하므로, `cwd` 매칭으로 슬롯 매핑 + `marker_pending`을 자가치유하도록 수정.
 - **`v0.3.5`** — **진행 보드**: 작업중인 슬롯마다 실시간 `🟡 N번 작업중 (Xs)` 카운터(1초 갱신, idle 전환 시 자동 삭제; 완료 결과는 별도 답장 DM으로 그대로 도착)를 **무음(silent)**으로 게시합니다. 더해 `perm_hook` 로그/입력 강화(sha256 지문 + `html.escape`, 동작 변화 없음).
 - **`v0.3.4`** — 간헐적 주입 실패 수정: `host.py`가 본문을 이제 **8자 청크로 사람 타이핑 속도**로 쓴 뒤 제출 `Enter`를 보냅니다. 이전의 통째 쓰기는 Claude Code TUI의 bracketed-paste 감지에 걸려, 중간 길이 메시지가 가끔 입력창에만 남는 문제를 해결합니다.
 - **`v0.3.3`** — **기능버튼 보드**(`/list`, `/open`, `/close`, `/use`, `/update-adhd`, … 를 타이핑 대신 탭) + 활성 터미널이 2개 이상일 때 `/close /stop /use /new`용 **인라인 slot picker** 팝업(단일 활성 = 한 번 탭에 즉시 실행); `/close`가 이제 **Windows Terminal 탭을 닫습니다**; `/update-adhd`는 현재/최신 버전과 CHANGELOG를 보여주고 적용 전 **예/아니오** 인라인 확인.
@@ -77,9 +78,10 @@ you (phone) ──DM "3️⃣ 로그 확인"──▶ Telegram Bot
 | `boards/` | 상태 보드(고정 텍스트 + ReplyKeyboard) + 진행 보드(슬롯별 `🟡 작업중` 카운터) |
 | `hooks/register_hook.py` | CC `SessionStart`: 번호 할당 |
 | `hooks/reply_hook.py` | CC `Stop`: 답장 캡처 + 전송 |
-| `hooks/ask_hook.py` | CC `PreToolUse`(`AskUserQuestion`): 명확화 질문을 Telegram **인라인 버튼**으로 라우팅 |
-| `hooks/perm_hook.py` | CC `PreToolUse`(`Bash\|Write\|Edit`): **위험 도구 호출**(`rm` / `git push` / kill / sudo / ...)을 Telegram **예/아니오**로 라우팅 — 안전한 도구는 지연 없이 자동 허용, 타임아웃 → 거부 |
-| `hooks/busy_hook.py` | CC `UserPromptSubmit`: 슬롯 작업중 표시 |
+| `hooks/dispatch_hook.py` | CC `PreToolUse`(`AskUserQuestion\|Bash\|Write\|Edit`): **단일 진입점** — `tool_name`으로 `ask_hook`(명확화 질문 → 인라인 버튼) 또는 `perm_hook`(위험 도구 → 예/아니오)로 분기. 기존 2개 엔트리를 병합(훅 5→4, 동작 변화 없음) |
+| `hooks/ask_hook.py` | `AskUserQuestion` 로직(`dispatch_hook`이 호출): 인라인 버튼 라우팅 |
+| `hooks/perm_hook.py` | `Bash\|Write\|Edit` 로직(`dispatch_hook`이 호출): 위험 도구 예/아니오 게이트 — 안전 도구 자동 허용, 타임아웃 → 거부 |
+| `hooks/busy_hook.py` | CC `UserPromptSubmit`: 슬롯 작업중 표시 (+ `/new`/`/clear` 후 session-id 드리프트 자가치유 → 답장/첨부 라우팅 유지) |
 
 ## 설치
 
@@ -219,17 +221,17 @@ Claude Code 창을 엽니다(Windows) 또는 `tmux` attach + Claude Code 실행(
     "SessionStart":      [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.register_hook" }] }],
     "Stop":              [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.reply_hook"    }] }],
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "python -m imadhd.hooks.busy_hook"     }] }],
-    "PreToolUse":        [{ "matcher": "AskUserQuestion",
-                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.ask_hook", "timeout": 300000 }] },
-                          { "matcher": "Bash|Write|Edit",
-                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.perm_hook", "timeout": 300000 }] }]
+    "PreToolUse":        [{ "matcher": "AskUserQuestion|Bash|Write|Edit",
+                            "hooks":  [{ "type": "command", "command": "python -m imadhd.hooks.dispatch_hook", "timeout": 300000 }] }]
   }
 }
 ```
 
-**`PreToolUse` / `AskUserQuestion`** 훅은 Claude Code의 명확화 질문을 터미널에서 멈추는 대신 **Telegram 인라인 버튼**으로 보냅니다. 옵션 탭 → 답이 Claude Code로 되먹여지고 작업 계속 — 폰→터미널 왕복 없음. 타임아웃 내 답이 없으면 질문이 거부됩니다(Claude Code가 다시 물어볼 수 있음). `TELEGRAM_ALLOWED_CHAT_ID`가 설정되지 않았을 때는 no-op 폴백(네이티브 프롬프트 표시).
+> **`PreToolUse` 1개 엔트리, 2가지 동작.** `dispatch_hook`이 stdin을 1회 파싱 후 `tool_name`으로 분기 — `AskUserQuestion` → 명확화 질문 인라인 버튼, `Bash`/`Write`/`Edit` → 위험 도구 예/아니오 게이트. (이전 릴리스는 `ask_hook`·`perm_hook`을 별도 엔트리 2개로 등록했으나, 재설치 시 단일 `dispatch_hook` 엔트리로 자동 마이그레이션됩니다.)
 
-**`PreToolUse` / `Bash|Write|Edit`** 훱(`perm_hook`)은 **위험 도구 호출** — `rm`, `git push`, `kill`, `sudo`, `drop`, 보호 디렉토리 쓰기 등 — 을 Claude Code가 실행하기 전 Telegram **예/아니오**로 라우팅. 안전한 도구(`ls`, `cat`, 보호 경로 외 편집)는 지연 0으로 자동 허용. 훅의 `permissionDecision: deny`는 **`bypassPermissions` 모드에서도** 존중 — 훱이 permission-mode 체크 전에 발동하므로 폰에서의 최후 관문. 타임아웃 → 거부(fail-closed). Telegram 마커 없는 터미널 직접 턴은 건너뛰어 로컬 작업이 결차단되지 않습니다.
+**`AskUserQuestion`** 경로는 Claude Code의 명확화 질문을 터미널에서 멈추는 대신 **Telegram 인라인 버튼**으로 보냅니다. 옵션 탭 → 답이 Claude Code로 되먹여지고 작업 계속 — 폰→터미널 왕복 없음. 타임아웃 내 답이 없으면 질문이 거부됩니다(Claude Code가 다시 물어볼 수 있음). `TELEGRAM_ALLOWED_CHAT_ID`가 설정되지 않았을 때는 no-op 폴백(네이티브 프롬프트 표시).
+
+**`Bash|Write|Edit`** 경로(`perm_hook`)는 **위험 도구 호출** — `rm`, `git push`, `kill`, `sudo`, `drop`, 보호 디렉토리 쓰기 등 — 을 Claude Code가 실행하기 전 Telegram **예/아니오**로 라우팅. 안전한 도구(`ls`, `cat`, 보호 경로 외 편집)는 지연 0으로 자동 허용. 훅의 `permissionDecision: deny`는 **`bypassPermissions` 모드에서도** 존중 — 훅이 permission-mode 체크 전에 발동하므로 폰에서의 최후 관문. 타임아웃 → 거부(fail-closed). Telegram 마커 없는 터미널 직접 턴은 건너뛰어 로컬 작업이 결차단되지 않습니다.
 
 > **`CLAUDE.md` 룰 불필요.** 답장은 Claude Code가 찍어야 할 후행 마커가 아닌, 주입 시점에 설정된 **pending 플래그**로 라우팅. Claude Code는 턴이 Telegram에서 왔는지 전혀 모릅니다 — 프롬프트 접미사도, 마커 에코도, 잊을 수 있는 행동 룰도 없습니다.
 

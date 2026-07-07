@@ -13,10 +13,11 @@ from pathlib import Path
 from .base import Command, Message, CommandContext, normalize_command
 
 # install.py HOOK_DEFS 와 동일 (재설치 안내 메시지용으로만 사용).
+# PreToolUse = 단일 dispatch_hook (ask+perm 병합, 2026-07-07).
 EXPECTED_HOOKS = {
     "SessionStart": "register_hook",
     "Stop": "reply_hook",
-    "PreToolUse": "ask_hook",
+    "PreToolUse": "dispatch_hook",
     "UserPromptSubmit": "busy_hook",
 }
 

@@ -109,12 +109,12 @@ def _origin_has_marker(transcript_path: str, marker: str) -> bool:
     return False
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return 0
+def handle(payload: dict) -> int:
+    """AskUserQuestion 처리 본체. dispatch_hook 가 stdin 파싱 후 라우팅.
 
+    단독 main()(cli btg-ask / 구버전 -m imadhd.hooks.ask_hook 직접 호출)도
+    stdin 파싱 후 본체 호출 → 로직 중복 없음.
+    """
     if payload.get("tool_name") != "AskUserQuestion":
         return 0
     tool_input = payload.get("tool_input") or {}
@@ -265,6 +265,19 @@ def main() -> int:
         }
     })
     return 0
+
+
+def main() -> int:
+    """단독 진입점(cli btg-ask / 구버전 -m imadhd.hooks.ask_hook).
+
+    신규 설치는 dispatch_hook 가 stdin 파싱 후 handle() 직접 호출하지만,
+    단독 호출·레거시 등록·테스트 호환성 위해 stdin 파싱 후 handle 위임 유지.
+    """
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0
+    return handle(payload)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,55 @@ def _debug_log(line: str) -> None:
         pass
 
 
+def _heal_session_drift(reg, data_dir, new_sid: str, cwd: str) -> bool:
+    """/clear 직후 session_id 드리프트 자가치유.
+
+    CC 는 /clear 를 같은 claude.exe PID 안에서 처리 → 새 transcript(새 session_id)
+    를 시작하지만 SessionStart 훅은 프로세스 시작 1회만 발화 → registry 의
+    session_id 가 갱신되지 않는다. 결과:
+      - do_inject 가 marker_pending/<old_sid> 로 회신플래그 기록
+      - reply_hook(Stop)이 new session_id 로 slot·marker 조회 실패 → 회신 스킵
+    본 훅(UserPromptSubmit)이 new session_id 를 가장 먼저 관측 → 여기서 복구:
+      1. 같은 cwd 슬롯 매칭(/clear 후에도 cwd 불변)
+      2. claim_slot(pid 재사용 분기) 로 session_id 를 new 로 갱신
+      3. marker_pending/<old> → /<new> 복사(직전 inject 의 회신플래그 보존)
+    반환: 치유 성공 여부. 다중 CC 동일 cwd 등 모호하면 첫 매치(단일 CC 가정).
+    """
+    if not new_sid or not cwd:
+        return False
+    cand = None
+    try:
+        for it in reg.active():
+            if (it.cwd or "") == cwd:
+                cand = it
+                break
+    except Exception:
+        return False
+    if cand is None or (cand.session_id or "") == new_sid:
+        return False
+    old_sid = cand.session_id or ""
+    try:
+        # claim_slot 의 pid-재사용 분기가 같은 pid 슬롯을 찾아 session_id 갱신.
+        # started_at·hwnd·pid·cwd 는 기존값 재전달(READY_GRACE·inject 경로 보존).
+        reg.claim_slot(
+            new_sid, cand.hwnd, cand.pid, cand.cwd, cand.started_at,
+            tmux_pane=getattr(cand, "tmux_pane", ""),
+        )
+    except Exception as e:
+        _debug_log(f"[busy] heal claim_slot failed old={old_sid[:8]} new={new_sid[:8]} err={e!r}")
+        return False
+    # marker 이전(old → new). /clear 직후 inject 가 old sid 로 남긴 회신플래그 보존.
+    if old_sid and old_sid != new_sid and data_dir:
+        try:
+            d = Path(data_dir) / "marker_pending"
+            old = d / old_sid
+            if d.is_dir() and old.exists():
+                (d / new_sid).write_text(old.read_text(encoding="utf-8"), encoding="utf-8")
+        except Exception:
+            pass
+    return True
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -39,6 +88,7 @@ def main() -> int:
     session_id = payload.get("session_id", "") or ""
     if not session_id:
         return 0
+    cwd = payload.get("cwd", "") or ""
 
     from ..config import Settings
     from ..core.registry import JSONFileRegistry
@@ -53,6 +103,13 @@ def main() -> int:
         return 0
     try:
         reg = JSONFileRegistry(s.registry_path, s.max_slots)
+        if not reg.find_by_session(session_id):
+            # /clear 등으로 같은 PID 에서 새 transcript(=새 session_id) 시작 시
+            # SessionStart 훅이 재발화하지 않음 → registry 가 stale id 에 묶임 →
+            # reply_hook(Stop)이 new id 로 slot·marker 조회 실패 → 회신 스킵
+            # (=텔레그램 "전송 안 됨"). 같은 cwd 슬롯 session_id·marker 를 new 로 갱신.
+            if _heal_session_drift(reg, s.data_dir, session_id, cwd):
+                _debug_log(f"[busy] drift healed session={session_id[:8]} cwd={cwd!r}")
         if reg.find_by_session(session_id):
             reg.set_status_by_session(session_id, "busy")
     except Exception as e:
