@@ -35,6 +35,13 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[2])
 _DETACHED = 0x08
 _NEW_PROC_GROUP = 0x200
 
+# /open 중복 spawn 가드(2026-07-07): 라우터가 409 Conflict(같은 봇 토큰 폴링 충돌)
+# 로 동일 update 를 중복 처리하거나 대표님이 더블 탭할 때 tmux 세션이 1초 차로
+# 2개 spawn 되는 현상 방지(오라클 실사고: 06:59:07/08 chleo-1783407547/7548).
+# 단일 라우터 프로세스 내 모듈 변수로 debounce.
+_LAST_OPEN_MONO: float = 0.0
+_OPEN_DEBOUNCE_SEC: float = 3.0
+
 # z.ai(GLM) 프록시 전용 env 키. /open 단일화(Anthropic 공식 고정)로 항상 제거 —
 # router(pm2) 가 옛 z.ai 셸 env 를 물려받아도 새 claude 는 로그인 계정으로 라우팅.
 _ANTHROPIC_PROXY_ENV_KEYS = (
@@ -103,6 +110,17 @@ class OpenCommand(Command):
         return normalize_command(msg.text) in self.TRIGGERS
 
     def handle(self, msg: Message, ctx: CommandContext) -> None:
+        global _LAST_OPEN_MONO
+        # debounce: 직전 /open 직후 짧은 시간 내 재진입(중복 update/더블 탭)은
+        # 무시. 세션 2개 동시 spawn → registry 슬롯 2개 → 입력 분산/2번 작업 회피.
+        now = time.monotonic()
+        if now - _LAST_OPEN_MONO < _OPEN_DEBOUNCE_SEC:
+            ctx.telegram.send(
+                msg.chat_id,
+                f"⏳ 직전 /open 직후 — 중복 생성 무시({_OPEN_DEBOUNCE_SEC:.0f}초 디바운스)",
+            )
+            return
+        _LAST_OPEN_MONO = now
         if os.name == "nt":
             env = build_open_env(os.environ)
             # host 인자: [--] 뒤 child args 를 claude 에 그대로 전달.
@@ -126,6 +144,8 @@ class OpenCommand(Command):
             )
             return
 
+        # 세션명 = 타임스탬프. 같은 초 더블 /open 은 handle 진입의
+        # _OPEN_DEBOUNCE_SEC debounce 가 먼저 차단 → 세션명 충돌/2세션 spawn 없음.
         session_name = f"chleo-{int(time.time())}"
         launch_cmd = build_linux_launch_cmd()
         try:
