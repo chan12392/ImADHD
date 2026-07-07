@@ -141,9 +141,10 @@ def main() -> int:
         return 0
 
     transcript_path = payload.get("transcript_path")
-    if not _origin_has_marker(transcript_path, s.reply_marker):
-        # 이번 turn 이 텔레그램 인입([A.D.H.D])이 아니면(=터미널 직접 작업) 라우팅 skip.
-        _debug_log(f"[ask] no origin marker ({s.reply_marker}) — native UI fallback")
+    if not _origin_has_marker(transcript_path, s.reply_marker) and not s.route_all_asks:
+        # 터미널 직접 작업(마커 없음). route_all_asks=False 면 네이티브 UI 폴백.
+        # True(기본)면 터미널 세션 질문도 텔레그램 inline 버튼으로 라우팅.
+        _debug_log(f"[ask] no origin marker ({s.reply_marker}) & route_all_asks off — native UI fallback")
         return 0
 
     reg = JSONFileRegistry(s.registry_path, s.max_slots)
