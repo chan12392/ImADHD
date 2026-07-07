@@ -18,6 +18,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from .base import InjectResult, Transport
 
@@ -42,6 +43,18 @@ _inject_lock = threading.Lock()
 # CC 응답생성 스피너로 판정할 프롬프트 부재 최대 대기(초). 이 시간 넘게
 # idle 이 안 되면 stuck 복구를 시도하되 계속 기다린다(호출자가 wait_idle 재호출).
 _TMUX_CMD_TIMEOUT = 5
+
+
+def _debug_log(line: str) -> None:
+    """inject 워커 동작 추적(reply_hook._debug_log 와 동일 경로/포맷).
+    첫 메시지 유실(busy race 드롭) 사고 재발 시 원인 추적에 필수."""
+    try:
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def _run(args: list[str], input_text: str | None = None) -> subprocess.CompletedProcess:
@@ -167,15 +180,41 @@ def _paste_inject(target: str, text: str) -> bool:
 
 
 def _inject_worker(tmux_target: str, text: str) -> None:
+    # 2026-07-07 실사고(오라클 chleo "클로이? 첫 메시지 유실"): /open 직후 CC 부팅
+    # busy 구간에 첫 텔레그램 메시지가 도착하면 _paste_inject 내부의 paste 직전
+    # idle 재확인이 busy 를 잡아 return False → 그대로 워커 종료 → 메시지 유실.
+    # 이후 2,3 번째 메시지는 정상 처리돼 "답 개수가 안 맞아 꼬인 것처럼" 보임.
+    # 실제 원인은 busy race 첫 주입 실패 → 드롭. 재시도 루프로 복구한다.
+    # wait_idle 은 stuck(잔류텍스트) 을 Enter→C-j 로 제출해 clear 하므로, 재시도
+    # 직전엔 입력창이 비어있는(idle) 상태가 보장된다 → 중복 주입 위험 없음.
+    MAX_INJECT_RETRIES = 4
     with _inject_lock:
-        st = _wait_idle(tmux_target, timeout=45.0)
-        if st == "dead":
-            return
-        _paste_inject(tmux_target, text)
+        for attempt in range(MAX_INJECT_RETRIES):
+            st = _wait_idle(tmux_target, timeout=45.0)
+            if st == "dead":
+                _debug_log(f"[inject] dead, abort text={text[:40]!r}")
+                return
+            if _paste_inject(tmux_target, text):
+                _debug_log(f"[inject] ok attempt={attempt} text={text[:40]!r}")
+                return
+            # paste 실패(busy race 또는 stuck 미복구). wait_idle 이 다시 idle/복구
+            # 만들어줄 때까지 짧게 대기 후 재시도.
+            _debug_log(
+                f"[inject] paste failed attempt={attempt} state={st} text={text[:40]!r}"
+            )
+            time.sleep(0.5)
+        _debug_log(
+            f"[inject] ALL RETRIES FAILED text={text[:40]!r} DROPPED"
+        )
 
 
 class TmuxLinuxTransport(Transport):
-    def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
+    def inject(
+        self,
+        target: dict,
+        text: str,
+        background: bool = False,
+    ) -> InjectResult:
         tmux_target = _resolve_target(target)
         # dead 여부만 가볍게(동기) 확인 — 이 이상(_wait_idle 의 최대 45s
         # busy-polling)을 여기서 동기로 하면 2026-07-05 실사고("ping 보내고
@@ -183,7 +222,9 @@ class TmuxLinuxTransport(Transport):
         # 폴링 자체가 그동안 멈춤). idle 대기는 전부 워커 스레드 몫.
         if not _has_session(tmux_target):
             return InjectResult(delivered=False, method="tmux-paste", note="tmux session dead")
-        threading.Thread(target=_inject_worker, args=(tmux_target, text), daemon=True).start()
+        threading.Thread(
+            target=_inject_worker, args=(tmux_target, text), daemon=True
+        ).start()
         return InjectResult(delivered=True, method="tmux-paste-async", note="비동기 처리중")
 
     def is_alive(self, target: dict) -> bool:
