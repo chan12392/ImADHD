@@ -30,9 +30,10 @@ One brain, many terminals in flight at once. 🧠⚡
 ---
 
 ## Status
-`v0.3.6` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
+`v0.3.7` — **cross-platform** (Windows `pipe_win` default + `sendkeys_win` fallback; Linux `tmux_linux`). Single-machine (router + terminals on the same host).
 
 ### What's new
+- **`v0.3.7`** — **`/close` multi/all**: `/close N M …` (space-separated), `/close N,M,…` (comma, spaces mixed OK), and `/close all` (every active slot) on top of the existing single `/close N`. Multi-close kills each slot then sends one summary line (no spam); duplicates deduped. **Bare-message routing popup**: a message with no number/sticky/pending that has no unambiguous target (0 or 2+ active terminals) used to be silently dropped — now it pops an inline "↘️ which terminal?" button row; tap → inject there (10 min TTL).
 - **`v0.3.6`** — **PreToolUse hook consolidation (5→4)**: the two `PreToolUse` entries (`ask_hook` for `AskUserQuestion`, `perm_hook` for `Bash|Write|Edit`) merge into one `dispatch_hook` entry that parses stdin once and routes by `tool_name`. No behavior change. Re-running `install` auto-migrates existing installs (scrubs the legacy per-module entries to avoid double-fire). **`/new`(`/clear`) reply/attachment fix**: after `/clear` the CC `session_id` changes but `SessionStart` doesn't re-fire, so the registry stayed pinned to the stale id and reverse replies (`reply_hook`) were dropped ("image not sending"). `busy_hook` (`UserPromptSubmit`) is the first to observe the new `session_id`, so it now self-heals the slot mapping + `marker_pending` by matching on `cwd`.
 - **`v0.3.5`** — **progress board**: each busy slot shows a live `🟡 N번 작업중 (Xs)` counter (1 s refresh, auto-deleted on idle; completion still arrives as a separate reply DM), sent **silently** so it doesn't play a notification sound. Plus `perm_hook` log/input hardening (sha256 fingerprint + `html.escape`) with no behavior change.
 - **`v0.3.4`** — intermittent inject fix: `host.py` now writes the body as **8-char chunks at human-typing cadence** before the submit `Enter`, defeating Claude Code TUI's bracketed-paste detection that occasionally left mid-length messages stuck in the input box.
@@ -171,7 +172,7 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 | `/list` | show active terminals + slot status |
 | `/new <N>` | reset terminal #N (`/clear`) for a fresh conversation — e.g. `/new 1` |
 | `/open` | open a new terminal in the user's home directory (Windows: new WT window; Linux: new tmux session). Home-based so CC recognizes its existing project & resume sessions. |
-| `/close <N>` | close terminal #N (Windows: terminates the whole WT tab tree) — e.g. `/close 1` |
+| `/close <N>` | close terminal(s) — `/close 1`, multi `/close 1 2 3` or `/close 1,2,3`, or `/close all` (Windows: terminates the whole WT tab tree) |
 | `/stop <N>` | send ESC to terminal #N to abort the current task |
 | `/use <N>` | set terminal #N as the **sticky default** — bare messages (no number) then route there until changed. `/use off` clears it |
 | `/pin` | refresh the pinned status board |
@@ -184,7 +185,7 @@ This injects into terminal #3. The inject sets a **pending flag** for that sessi
 ### Status board (pinned)
 The pinned message shows every slot: ⭕ idle / 📝 busy / ⏳ pending / ❌ dead. The `ReplyKeyboard` is **function-button-first** — four rows of command buttons (`📋 /list`, `📌 /pin`, `🆕 /new`, `📂 /open`, `✖️ /close`, `⏹ /stop`, `🎯 /use`, `❓ /help`, `🩺 /doctor`, `🔄 /update-adhd`) over a compact 1️⃣–6️⃣ number keypad for injecting messages. It auto-refreshes as slots change state.
 
-> **Single-terminal shortcut:** if only one slot is active, you can skip the number — a bare message is injected into that terminal automatically.
+> **Single-terminal shortcut:** if only one slot is active, you can skip the number — a bare message is injected into that terminal automatically. With **two or more** active and no number/sticky/pending, a bare message instead pops an inline **"↘️ which terminal?"** button row; tap a slot to inject it there (held for 10 min).
 
 ### Images (bidirectional)
 - **CC → Telegram**: when Claude Code's reply carries an image (a generated PNG, a screenshot it produced), it is sent to your phone as a photo via `sendPhoto` — hand-rolled `multipart/form-data` (no `requests`), right alongside the text reply. Multiple images in one reply are each sent as their own message.

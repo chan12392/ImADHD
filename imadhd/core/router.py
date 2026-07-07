@@ -102,6 +102,27 @@ def sync_alive(reg, log=None) -> int:
         return 0
 
 
+def _route_keyboard(nums: list[int]) -> list[list[dict]]:
+    """라우팅 팝업용 인라인 키보드. callback_data = "r:<num>" (64바이트 이내).
+
+    번호 없는 본문이 타겟 불명(0/2+ 활성)일 때 송신 → 사용자 탭 시 route_pending
+    에 대기중인 본문을 해당 슬롯으로 주입. 3열 배치(slot_picker 와 동일).
+    """
+    from ..commands.inject_command import EMOJI_TO_NUM
+    num_to_emoji = {n: e for e, n in EMOJI_TO_NUM.items()}
+    rows: list[list[dict]] = []
+    row: list[dict] = []
+    for n in nums:
+        emoji = num_to_emoji.get(n, str(n))
+        row.append({"text": f"{emoji} {n}번", "callback_data": f"r:{n}"})
+        if len(row) >= 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return rows
+
+
 def run(settings: "Settings") -> None:
     from ..telegram_api.client import TelegramClient
     from .registry import JSONFileRegistry
@@ -167,6 +188,12 @@ def run(settings: "Settings") -> None:
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
 
+    # 라우팅 팝업 대기 상태: 번호 없는 본문이 타겟 불명(0/2+ 활성)일 때
+    # "어느 슬롯으로?" 인라인 버튼 송신 → 사용자 탭 시 해당 슬롯으로 본문 주입.
+    # chat -> (body, ts). 단일 채팅 가정; 새 본문 오면 덮어쓰기(최신 우선).
+    route_pending: dict[str, tuple[str, float]] = {}
+    ROUTE_PENDING_TTL = 600.0  # 팝업 후 10분 내 미탭 → 만료.
+
     def _handle_callback(cbq: dict) -> None:
         """AskUserQuestion 인라인 버튼 클릭(callback_query) → ask 기록에 답 기록.
 
@@ -218,6 +245,42 @@ def run(settings: "Settings") -> None:
                                              {"inline_keyboard": []})
             except Exception:
                 pass
+            return
+        # r: = 번호 없는 본문 라우팅 팝업 응답. 본문은 route_pending 에 대기중.
+        if cbdata.startswith("r:"):
+            try:
+                rnum = int(cbdata[2:])
+            except ValueError:
+                rnum = 0
+            rp = route_pending.pop(str(chat), None)   # 탭=소비(성공·실패 무관)
+            # 팝업 메시지 버튼 제거(탭 완료·만료 공통, 중복 탭 방지).
+            try:
+                tg.edit_message_reply_markup(str(chat), cmsg.get("message_id"),
+                                             {"inline_keyboard": []})
+            except Exception:
+                pass
+            if rnum < 1:
+                try: tg.answer_callback(cq, "⚠️ 알 수 없는 버튼")
+                except Exception: pass
+                return
+            if not rp or time.time() - rp[1] > ROUTE_PENDING_TTL:
+                try: tg.answer_callback(cq, "⚠️ 만료됨 — 메시지를 다시 보내주세요")
+                except Exception: pass
+                return
+            rinfo = reg.get(rnum)
+            if not rinfo or not transport.is_alive(rinfo.to_dict()):
+                try: tg.answer_callback(cq, f"❌ {rnum}번 종료됨 — 다른 번호로 다시 보내주세요")
+                except Exception: pass
+                return
+            try:
+                do_inject(ctx, rnum, rp[0], str(chat))
+                board.refresh_if_changed(pending_num=_pending_num())
+                try: tg.answer_callback(cq, f"✅ {rnum}번으로 전송")
+                except Exception: pass
+            except Exception as e:
+                log.exception("route popup inject failed: %s", e)
+                try: tg.answer_callback(cq, "⚠️ 전송 실패")
+                except Exception: pass
             return
         # u: = update-adhd 인라인 Yes/No(대표님 2026-07-07). handle() 가 버전표시+
         # 체인지로그+yes/no 팝업 송신 → 콜백 yes → run_update() 분리(pull→pytest→restart).
@@ -571,7 +634,7 @@ def run(settings: "Settings") -> None:
                         del ctx.pending[str(chat)]  # 만료 → 일반 메시지로
                 elif not text.startswith("/"):
                     # 자동 타겟: 활성 터미널 1개면 /N·버튼·pending 없이 본문 즉시 주입.
-                    # 2개+ → 현행 유지(번호 명령으로 명시 선택). 슬래시명령(/list 등)은 제외.
+                    # 슬래시명령(/list 등)은 제외.
                     actives = reg.active()
                     if len(actives) == 1:
                         try:
@@ -580,6 +643,21 @@ def run(settings: "Settings") -> None:
                             handled = True
                         except Exception as e:
                             log.exception("auto-target inject failed: %s", e)
+                    else:
+                        # 타겟 불명(0 또는 2+ 활성): 번호 없는 본문이 갈 곳 없음 →
+                        # "어느 슬롯으로?" 인라인 팝업(대표님 2026-07-07). 본문은
+                        # route_pending 에 대기 → 사용자 탭(r:<num>) 시 주입.
+                        targets = sorted(actives, key=lambda i: i.number)
+                        if not targets:
+                            tg.send(str(chat), "❌ 열린 터미널 없음 — /open 으로 먼저 열기")
+                        else:
+                            route_pending[str(chat)] = (text, time.time())
+                            tg.send(
+                                str(chat),
+                                "↘️ 어느 터미널로 보낼까?",
+                                reply_markup={"inline_keyboard": _route_keyboard([t.number for t in targets])},
+                            )
+                        handled = True
             if not handled:
                 for cmd in commands:
                     try:
