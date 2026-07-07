@@ -33,8 +33,10 @@ ENV_FILE = I.ENV_FILE
 REPO_DIR = I.REPO_DIR
 
 # install.HOOK_DEFS 의 module 들(훅 제거 매칭용).
+# 병합 전/후 모듈 모두 포함 → 구버전 설치의 ask_hook/perm_hook 개별 엔트리도 제거.
 HOOK_MODULES = ("imadhd.hooks.register_hook", "imadhd.hooks.reply_hook",
-                "imadhd.hooks.ask_hook", "imadhd.hooks.busy_hook")
+                "imadhd.hooks.dispatch_hook", "imadhd.hooks.ask_hook",
+                "imadhd.hooks.perm_hook", "imadhd.hooks.busy_hook")
 
 
 def _data_dir() -> Path:

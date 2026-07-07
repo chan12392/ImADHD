@@ -117,12 +117,11 @@ def emit_deny(reason: str) -> None:
     }})
 
 
-def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        return 0
+def handle(payload: dict) -> int:
+    """위험도구 승인 처리 본체. dispatch_hook 가 stdin 파싱 후 라우팅.
 
+    단독 main()도 stdin 파싱 후 본체 호출 → 로직 중복 없음.
+    """
     tool_name = payload.get("tool_name") or ""
     if tool_name not in ("Bash", "Write", "Edit"):
         return 0   # 다른 도구 = 훅 미관여
@@ -236,6 +235,19 @@ def main() -> int:
     _debug_log(f"[perm] denied perm_id={perm_id} reason={deny_reason}")
     emit_deny(deny_reason)
     return 0
+
+
+def main() -> int:
+    """단독 진입점(구버전 -m imadhd.hooks.perm_hook / 테스트).
+
+    신규 설치는 dispatch_hook 가 handle() 직접 호출. 단독·레거시 호환 위해
+    stdin 파싱 후 handle 위임 유지.
+    """
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 0
+    return handle(payload)
 
 
 if __name__ == "__main__":

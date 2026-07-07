@@ -379,16 +379,21 @@ def step2_commands(token: str, chat: str, max_slots: int) -> None:
 # ============ Step 3: Claude Code 훅 자동 추가 ============
 # 직접 모듈 진입점 (cli 래퍼보다 의존 적음, 기존 수동 설치 훅과 동일 형태).
 # (event, module, timeout, matcher or None)
+#
+# 2026-07-07 병합: PreToolUse ask_hook + perm_hook 2엔트리 → dispatch_hook 1엔트리.
+# matcher AskUserQuestion|Bash|Write|Edit 로 4도구 모두 잡고 dispatch_hook 이
+# tool_name 으로 ask/perm 본체로 분기. 총 훅 5→4, 기능 무손실.
+# 구버전 설치의 ask_hook/perm_hook 개별 엔트리는 step3_hooks 의 마이그레이션이 제거.
 HOOK_DEFS = [
     ("SessionStart", "imadhd.hooks.register_hook", 15000, None),
     ("Stop", "imadhd.hooks.reply_hook", 15000, None),
-    ("PreToolUse", "imadhd.hooks.ask_hook", 300000, "AskUserQuestion"),
-    # 위험 도구(rm/git push/kill/...) → 텔레그램 Yes/No 승인. 동일 matcher 의
-    # recall_hook(lessonloop)은 additionalContext 만 주입하고 permissionDecision
-    # 을 emit 안 함 → 이 훅의 allow/deny 가 충돌 없이 그대로 적용(bypass 모드 포함).
-    ("PreToolUse", "imadhd.hooks.perm_hook", 300000, "Bash|Write|Edit"),
+    ("PreToolUse", "imadhd.hooks.dispatch_hook", 300000, "AskUserQuestion|Bash|Write|Edit"),
     ("UserPromptSubmit", "imadhd.hooks.busy_hook", 10000, None),
 ]
+
+# 병합 전 PreToolUse 개별 모듈 — 업데이트 시 settings.json 에서 제거(더블 발화 방지).
+# dispatch_hook 으로 대체됨. uninstall 도 동일 세트 참조.
+LEGACY_PRETOOLUSE_MODULES = ("imadhd.hooks.ask_hook", "imadhd.hooks.perm_hook")
 
 
 def _hook_command(module: str) -> str:
@@ -466,6 +471,25 @@ def step3_hooks(token: str, chat: str) -> None:
         _write_secret(bak, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
         _ok(f"백업(redacted, 0600) → {bak.name}")
     hooks = data.setdefault("hooks", {})
+    # 마이그레이션: 병합 전 PreToolUse 개별 엔트리(ask_hook/perm_hook) 제거.
+    # 방치 시 dispatch_hook 과 더블 발화 → 동일 도구에 permissionDecision 2번 emit 충돌.
+    # 일반 사용자가 pip update 후 재설치(python -m imadhd install)하면 자동 정리.
+    ptu = hooks.get("PreToolUse")
+    if isinstance(ptu, list):
+        kept: list = []
+        scrubbed = 0
+        for g in ptu:
+            blob = json.dumps(g, ensure_ascii=False) if isinstance(g, dict) else ""
+            if isinstance(g, dict) and any(m in blob for m in LEGACY_PRETOOLUSE_MODULES):
+                scrubbed += 1
+                continue
+            kept.append(g)
+        if scrubbed:
+            if kept:
+                hooks["PreToolUse"] = kept
+            else:
+                hooks.pop("PreToolUse", None)
+            _ok(f"PreToolUse 구버전 엔트리 {scrubbed}개 제거 (ask+perm → dispatch 병합)")
     added = 0
     for event, module, timeout, matcher in HOOK_DEFS:
         group_list = hooks.setdefault(event, [])
