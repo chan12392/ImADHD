@@ -188,10 +188,10 @@ def run(settings: "Settings") -> None:
 
     alive_fn = lambda info: transport.is_alive(info.to_dict())  # noqa: E731
 
-    # 라우팅 팝업 대기 상태: 번호 없는 본문이 타겟 불명(0/2+ 활성)일 때
-    # "어느 슬롯으로?" 인라인 버튼 송신 → 사용자 탭 시 해당 슬롯으로 본문 주입.
-    # chat -> (body, ts). 단일 채팅 가정; 새 본문 오면 덮어쓰기(최신 우선).
-    route_pending: dict[str, tuple[str, float]] = {}
+    # 라우팅 팝업 대기 상태: 번호 없는 본문/이미지가 타겟 불명(0/2+ 활성)일 때
+    # "어느 슬롯으로?" 인라인 버튼 송신 → 사용자 탭 시 해당 슬롯으로 주입.
+    # chat -> {kind: text|photo, body, ts}. 단일 채팅 가정; 새 입력 오면 덮어쓰기.
+    route_pending: dict[str, dict] = {}
     ROUTE_PENDING_TTL = 600.0  # 팝업 후 10분 내 미탭 → 만료.
 
     def _handle_callback(cbq: dict) -> None:
@@ -263,7 +263,7 @@ def run(settings: "Settings") -> None:
                 try: tg.answer_callback(cq, "⚠️ 알 수 없는 버튼")
                 except Exception: pass
                 return
-            if not rp or time.time() - rp[1] > ROUTE_PENDING_TTL:
+            if not rp or time.time() - rp["ts"] > ROUTE_PENDING_TTL:
                 try: tg.answer_callback(cq, "⚠️ 만료됨 — 메시지를 다시 보내주세요")
                 except Exception: pass
                 return
@@ -273,7 +273,7 @@ def run(settings: "Settings") -> None:
                 except Exception: pass
                 return
             try:
-                do_inject(ctx, rnum, rp[0], str(chat))
+                do_inject(ctx, rnum, rp["body"], str(chat))
                 board.refresh_if_changed(pending_num=_pending_num())
                 try: tg.answer_callback(cq, f"✅ {rnum}번으로 전송")
                 except Exception: pass
@@ -464,7 +464,24 @@ def run(settings: "Settings") -> None:
             if len(actives) == 1:
                 num = actives[0].number
         if num is None:
-            tg.send(chat, f"✅ 이미지 저장: {path}\n(열린 CC 없음 — 번호 지정 후 재전송)")
+            # 타겟 불명(0 또는 2+ 활성): 0.3.7 라우팅 팝업 확장(대표님 2026-07-07).
+            # 이미지는 이미 inbox 에 저장됨(백업 보존). 본문은 route_pending 대기 →
+            # 사용자 탭(r:<num>) 시 주입. 활성 0 → 안내만.
+            actives = reg.active()
+            targets = sorted(actives, key=lambda i: i.number)
+            caption = (m.get("caption") or "").strip()
+            body = f"이미지 수신: {path}"
+            if caption:
+                body += f"\n{caption}"
+            if not targets:
+                tg.send(chat, f"✅ 이미지 저장: {path}\n(열린 터미널 없음 — /open 후 재전송)")
+            else:
+                route_pending[str(chat)] = {"kind": "photo", "body": body, "ts": time.time()}
+                tg.send(
+                    chat,
+                    "↘️ 이 이미지를 어느 터미널로?",
+                    reply_markup={"inline_keyboard": _route_keyboard([t.number for t in targets])},
+                )
             return
         caption = (m.get("caption") or "").strip()
         body = f"이미지 수신: {path}"
@@ -651,7 +668,7 @@ def run(settings: "Settings") -> None:
                         if not targets:
                             tg.send(str(chat), "❌ 열린 터미널 없음 — /open 으로 먼저 열기")
                         else:
-                            route_pending[str(chat)] = (text, time.time())
+                            route_pending[str(chat)] = {"kind": "text", "body": text, "ts": time.time()}
                             tg.send(
                                 str(chat),
                                 "↘️ 어느 터미널로 보낼까?",
