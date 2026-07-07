@@ -30,9 +30,10 @@ Windows Terminal이나 Stream Deck 런처를 쓰면서 기존 Claude Code 창을
 ---
 
 ## 상태
-`v0.3.6` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
+`v0.3.7` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
 
 ### 새 소식
+- **`v0.3.7`** — **`/close` 다중·전체 종료**: 기존 단일 `/close N`에 더해 `/close N M …`(공백 다중), `/close N,M,…`(콤마 다중, 띄어쓰기 혼합 OK), `/close all`(활성 슬롯 전체) 지원. 다중 종료는 슬롯별 kill 후 결과를 한 줄로 요약 송신(스팸 방지), 중복 번호 자동 제거. **번호 없는 본문 라우팅 팝업**: 번호/sticky/pending 없이 온 본문이 타겟 불명(활성 0 또는 2+ 개)일 때 기존엔 조용히 사라졌는데, 이제 "↘️ 어느 터미널로 보낼까?" 인라인 버튼이 팝업 → 탭하면 해당 슬롯으로 주입(본문 10분 TTL 대기). 활성 1개면 종전대로 자동 주입.
 - **`v0.3.6`** — **PreToolUse 훅 통합(5→4)**: 두 `PreToolUse` 엔트리(`AskUserQuestion`용 `ask_hook`, `Bash|Write|Edit`용 `perm_hook`) → stdin을 1회만 파싱하고 `tool_name`으로 분기하는 단일 `dispatch_hook` 엔트리로 병합. 동작 변화 없음. `install` 재실행 시 기존 설치를 자동 마이그레이션(더블 발화 충돌 방지용 레거시 개별 엔트리 스크럽). **`/new`(`/clear`) 직후 회신/첨부 누락 수정**: `/clear` 직후 CC `session_id`가 바뀌지만 `SessionStart` 훅은 재발화하지 않아 registry 매핑이 stale id에 고정 → 역방향 회신(`reply_hook`)이 누락되어("이미지가 안 보내져") 인식됨. `busy_hook`(`UserPromptSubmit`)가 new `session_id`를 가장 먼저 관측하므로, `cwd` 매칭으로 슬롯 매핑 + `marker_pending`을 자가치유하도록 수정.
 - **`v0.3.5`** — **진행 보드**: 작업중인 슬롯마다 실시간 `🟡 N번 작업중 (Xs)` 카운터(1초 갱신, idle 전환 시 자동 삭제; 완료 결과는 별도 답장 DM으로 그대로 도착)를 **무음(silent)**으로 게시합니다. 더해 `perm_hook` 로그/입력 강화(sha256 지문 + `html.escape`, 동작 변화 없음).
 - **`v0.3.4`** — 간헐적 주입 실패 수정: `host.py`가 본문을 이제 **8자 청크로 사람 타이핑 속도**로 쓴 뒤 제출 `Enter`를 보냅니다. 이전의 통째 쓰기는 Claude Code TUI의 bracketed-paste 감지에 걸려, 중간 길이 메시지가 가끔 입력창에만 남는 문제를 해결합니다.
@@ -170,7 +171,7 @@ Claude Code 창을 엽니다(Windows) 또는 `tmux` attach + Claude Code 실행(
 | `/list` | 활성 터미널 + 슬롯 상태 표시 |
 | `/new <N>` | N번 터미널을 `/clear`로 리셋하여 새 대화 — 예: `/new 1` |
 | `/open` | 홈 디렉토리에 새 터미널 열기(Windows: 새 WT 창, Linux: 새 tmux 세션). 홈 기반이라 CC가 기존 프로젝트 & resume 세션을 인식. |
-| `/close <N>` | N번 터미널 종료(Windows: WT 탭 트리 전체 종료) — 예: `/close 1` |
+| `/close <N>` | 터미널 종료 — `/close 1`, 다중 `/close 1 2 3` 또는 `/close 1,2,3`, 전체 `/close all` (Windows: WT 탭 트리 전체 종료) |
 | `/stop <N>` | N번 터미널에 ESC 전송, 현재 작업 중단 |
 | `/use <N>` | N번 터미널을 **sticky 기본**으로 — 번호 없는 메시지가 변경 전까지 그곳으로 라우팅. `/use off`로 해제 |
 | `/pin` | 고정 상태 보드 새로고침 |
@@ -183,7 +184,7 @@ Claude Code 창을 엽니다(Windows) 또는 `tmux` attach + Claude Code 실행(
 ### 상태 보드(고정)
 고정 메시지가 모든 슬롯을 표시: ⭕ 대기 / 📝 작업중 / ⏳ 대기중 / ❌ 죽음. `ReplyKeyboard`는 **기능버튼 우선** — 명령 버튼 4행(`📋 /list`, `📌 /pin`, `🆕 /new`, `📂 /open`, `✖️ /close`, `⏹ /stop`, `🎯 /use`, `❓ /help`, `🩺 /doctor`, `🔄 /update-adhd`) 위에 메시지 주입용 간결한 1️⃣–6️⃣ 번호 키패드. 슬롯 상태가 바뀌면 자동 새로고침.
 
-> **단일 터미널 단축:** 활성 슬롯이 하나뿐이면 번호를 생략해도 — bare 메시지가 자동으로 그 터미널에 주입됩니다.
+> **단일 터미널 단축:** 활성 슬롯이 하나뿐이면 번호를 생략해도 — bare 메시지가 자동으로 그 터미널에 주입됩니다. **2개 이상**이고 번호/sticky/pending도 없으면, bare 메시지 대신 인라인 **"↘️ 어느 터미널로 보낼까?"** 버튼이 팝업 → 슬롯 탭하면 그곳으로 주입(10분간 대기).
 
 ### 이미지(양방향)
 - **CC → Telegram**: Claude Code 답장에 이미지가 실려 오면(생성한 PNG, 본인이 찍은 스크린샷), 텍스트 답장과 함께 `sendPhoto`로 폰에 전송 — hand-rolled `multipart/form-data`(`requests` 무의존). 한 답장에 여러 이미지면 각각 별도 메시지로.

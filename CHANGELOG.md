@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.7 — 2026-07-07
+- **`/close` 다중·전체 종료** — `/close N` 단일 외에 `/close N M …`(공백 다중), `/close N,M,…`(콤마 다중, 띄어쓰기 혼합 OK), `/close all`(활성 슬롯 전체) 지원. 다중 종료 시 슬롯별 kill 후 결과를 한 건으로 요약 송신(스팸 방지). 중복 번호 자동 제거·순서 보존. 숫자 아닌 인자 → 사용법 안내. 단일 `/close N`은 기존 동작·메시지 그대로(`_close_single` 경로).
+- **번호 없는 본문 → 라우팅 팝업** — 번호(이모지/`/N`)·sticky·pending 없이 온 본문이 타겟 불명(활성 0 또는 2+ 개)일 때 기존엔 silent drop. 이제 "↘️ 어느 터미널로 보낼까?" 인라인 버튼(활성 슬롯 번호) 팝업 송신 → 탭 시 해당 슬롯으로 본문 주입. 본문은 `route_pending`(chat→(body,ts), 10분 TTL)에 대기. 콜백 스킴 `r:<num>`. 활성 0이면 "열린 터미널 없음" 안내. 활성 1개면 종전대로 자동 주입(모호성 없음).
+- **검증**: pytest 381 passed.
+
 ## 0.3.6 — 2026-07-07
 - **PreToolUse 훅 병합 (5→4)** — `ask_hook`(`AskUserQuestion`)과 `perm_hook`(`Bash|Write|Edit`) 두 `PreToolUse` 엔트리 → 단일 `dispatch_hook` 엔트리(matcher `AskUserQuestion|Bash|Write|Edit`)로 병합. stdin 1회 파싱 후 `tool_name`으로 분기, 동작 변화 없음. `install` 재실행 시 기존 개별 엔트리를 자동 제거·마이그레이션(더블 발화 충돌 방지). `uninstall`·`/doctor` 동기화.
 - **`/new`(`/clear`) 직후 첨부/회신 누락 수정** — `/clear`는 같은 claude.exe PID 안에서 새 transcript(=새 `session_id`)를 시작하지만 `SessionStart` 훅이 재발화하지 않아 registry 매핑이 stale id에 고정 → 역방향 회신(`reply_hook`)이 slot·marker 조회에 실패해 "전송 안 됨"으로 인식. `busy_hook`(`UserPromptSubmit`)가 new session_id를 가장 먼저 관측하므로 같은 cwd 슬롯을 찾아 session_id와 `marker_pending`을 new로 자가치유. 단일 CC 가정.
