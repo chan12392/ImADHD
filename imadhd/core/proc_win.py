@@ -280,6 +280,19 @@ def console_hwnd(cc_pid: int) -> int:
     return raw
 
 
+def hwnd_owner_pid(hwnd: int) -> int | None:
+    """hwnd 소유 프로세스 pid. 죽은 핸들/실패 시 None.
+
+    is_alive 가 WT 창 닫힘·핸들 재활용 좀비(claude.exe 는 살아있으나 붙었던
+    터미널/콘솔 창 소유자가 slot pid 가 아닌 경우)를 잡기 위해 사용.
+    2026-07-07 대표님 지적 '1번 터미널 없는데 텔레그램엔 살아있다'."""
+    if not hwnd or not user32 or not user32.IsWindow(hwnd):
+        return None
+    pid_box = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_box))
+    return int(pid_box.value) if pid_box.value else None
+
+
 def create_time(pid: int) -> float | None:
     """pid 프로세스 생성시각(unix epoch). 보정(시간순 매칭)용. 실패 시 None."""
     h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))

@@ -79,6 +79,15 @@ def sync_alive(reg, log=None) -> int:
         by_pid = {info.pid: info for info in reg.active()}
         needs: list[int] = []
         for cc_pid in alive:
+            # 고아 claude.exe(WT 창 닫힘·백그라운드 잔존) 재등록 스킵.
+            # console_hwnd 소유자가 cc_pid 자기가 아니면 다른 proc 로 핸들 넘어간
+            # 잔존 프로세스 — is_alive 가 dead 로 판정(C)하는 것과 대칭(D).
+            # 이게 없으면 sweep_dead 가 release → sync_alive 가 재등록 → 루프.
+            ch = proc_win.console_hwnd(int(cc_pid))
+            if ch:
+                owner = proc_win.hwnd_owner_pid(ch)
+                if owner is not None and owner != int(cc_pid):
+                    continue
             info = by_pid.get(int(cc_pid))
             if info is None:
                 needs.append(int(cc_pid))
@@ -409,6 +418,17 @@ def run(settings: "Settings") -> None:
         board.refresh_if_changed()   # 시작 시 공지 동기화(있으면)
     except Exception as e:
         log.warning("init board refresh failed: %s", e)
+
+    # 시작 시 1회 스캔: PC 재부팅·비정상 종료 후 디스크에 남은 stale slot을
+    # 루프 첫 틱(getUpdates long-poll 한 사이클)을 기다리지 않고 즉시 정리.
+    # (대표님 지적 — "PC 끄면 라우터가 터미널 꺼진 걸 인식 못 함, 시작 시 스캔".)
+    try:
+        removed = reg.sweep_dead(alive_fn)
+        if removed:
+            log.info("init scan: removed %d stale slot(s)", removed)
+        sync_alive(reg, log)
+    except Exception as e:
+        log.warning("init scan failed: %s", e)
 
     while True:
         # heartbeat: ask_hook 이 이 파일 신선도로 router 생존을 추정해 죽어있으면
