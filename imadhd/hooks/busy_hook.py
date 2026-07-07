@@ -15,6 +15,19 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+
+
+def _debug_log(line: str) -> None:
+    """진단 로그(reply_hook 과 동일 포맷). busy_hook 은 실패 원인 추적이
+    어려워 추가(2026-07-07 감사 P0 — 기존엔 진단 로그 전무)."""
+    try:
+        p = Path.home() / ".imadhd" / "debug.log"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -30,10 +43,20 @@ def main() -> int:
     from ..config import Settings
     from ..core.registry import JSONFileRegistry
 
-    s = Settings.load()
-    reg = JSONFileRegistry(s.registry_path, s.max_slots)
-    if reg.find_by_session(session_id):
-        reg.set_status_by_session(session_id, "busy")
+    # 설정 미구성/.env 깨짐 → 상태갱신만 스킵, 훅 자체는 죽지 않음.
+    # UserPromptSubmit 훅이 죽으면 CC 입력 처리 자체가 불명확해진다
+    # (reply_hook.py:276-280 동일 패턴 — 2026-07-07 감사 P0).
+    try:
+        s = Settings.load()
+    except Exception as e:
+        _debug_log(f"[busy] Settings.load failed session={session_id[:8]} err={e!r}")
+        return 0
+    try:
+        reg = JSONFileRegistry(s.registry_path, s.max_slots)
+        if reg.find_by_session(session_id):
+            reg.set_status_by_session(session_id, "busy")
+    except Exception as e:
+        _debug_log(f"[busy] registry update failed session={session_id[:8]} err={e!r}")
     return 0
 
 

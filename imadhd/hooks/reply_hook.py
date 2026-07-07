@@ -14,9 +14,17 @@ stop_hook_active=True 면 통과(무한루프 방지).
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
+
+
+def _mask_token(s) -> str:
+    """예외 repr/로그에서 bot token URL 노출 방지(2026-07-07 보안 P1#6).
+    텔레그램 Bot API 는 token 이 URL path 에 들어가 HTTPError repr 등에
+    그대로 노출 — debug.log 를 실수로 공유하면 token 유출."""
+    return re.sub(r"bot\d+:[A-Za-z0-9_-]{20,}", "bot<redacted>", str(s))
 
 # Stop 훅 실행 시점에 transcript jsonl 이 아직 디스크에 flush 안 된 레이스가
 # 있다(2026-07-05 실사고: exists=False, text_len=0 으로 빠져 should_reply=False
@@ -325,20 +333,15 @@ def main() -> int:
         _debug_log(f"[reply] marker turn but no assistant text/image session={session_id[:8]}")
         clear_marker_pending(s.data_dir, session_id)
         return 0
-    # 길이 게이트: HARD 초과 + 재시도 아님 → 1회 "짧게 다시" block.
-    # stop_hook_active(재시도 턴)면 포기하고 전체 전송 — 길어도 청크분할로 감당.
-    # 마커 self-heal 과 동일 루프 가드(재시도에선 더 안 막음).
-    if too_long and not stop_hook_active:
-        reason = (
-            f"[imadhd] 답이 너무 김(>{REPLY_HARD_LIMIT}자). "
-            f"텔레그램은 결론 먼저 {REPLY_SOFT_LIMIT}자 이하로 다시."
-        )
+    # 길이 게이트 폐지(2026-07-07 대표님 결정): HARD 초과 block → CC 재작성 루프가
+    # 회신 지연/누락 인상 유발(터미널↔텔레그램 전환 시 특히). 대신 client.send 가
+    # 청크 분할(마크다운/줄바꿈 경계)로 전체 전송 — 누락 방지가 "짧게 강제"보다 우선.
+    # 대표님 mem0 가독성 선호(700/1200)는 CC 프롬프트·청크 크기로 보존(회신 게이트 아님).
+    if too_long:
         _debug_log(
-            f"[reply] blocking to re-request short reply session={session_id[:8]} "
+            f"[reply] long reply, skip block → chunked send session={session_id[:8]} "
             f"len={len(text)}"
         )
-        sys.stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False) + "\n")
-        return 0
     clear_marker_pending(s.data_dir, session_id)
     body = mc.build_text(rp)
 
@@ -361,10 +364,10 @@ def main() -> int:
             # 통째로 유실된다(2026-07-04 발견).
             try:
                 sent_ids = tg.send(s.allowed_chat_id, msg)
-                _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} chunks={len(sent_ids)} (html err={e1!r})")
+                _debug_log(f"[reply] sent plain fallback ok session={session_id[:8]} chunks={len(sent_ids)} (html err={_mask_token(e1)})")
             except Exception as e2:
                 sent_ids = []
-                _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={e1!r} plain_err={e2!r}")
+                _debug_log(f"[reply] send FAILED both html/plain session={session_id[:8]} html_err={_mask_token(e1)} plain_err={_mask_token(e2)}")
 
     # CC→TG 이미지 회신: 마지막 assistant 메시지의 image 블록(base64)을
     # 디코딩해 sendPhoto 로 각각 전송. caption=번호(라우팅 식별용). text 회신과
@@ -383,7 +386,7 @@ def main() -> int:
                 f"bytes={len(img['data'])}"
             )
         except Exception as e:
-            _debug_log(f"[reply] send_photo failed session={session_id[:8]} err={e!r}")
+            _debug_log(f"[reply] send_photo failed session={session_id[:8]} err={_mask_token(e)}")
     # 답장 라우팅 매핑: 봇 송신 message_id → 이 세션 터미널번호.
     # 대표님이 이 메시지에 "답장"하면 router 가 reply_to_message.message_id 로
     # 이 번호를 찾아 해당 터미널로 주입(2+ 터미널 명시적 라우팅).
