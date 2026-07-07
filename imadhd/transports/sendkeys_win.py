@@ -206,12 +206,34 @@ class SendKeysWinTransport(Transport):
     def is_alive(self, target: dict) -> bool:
         """CC 생사. pid 의 프로세스가 claude.exe 여야 alive.
         터미널 pid(WindowsTerminal) 로 등록된 레거시 슬롯 → 자동 유령 처리.
-        hwnd-only(구버그) 회피."""
+        hwnd-only(구버그) 회피.
+        pid 재사용 회피: pid 프로세스 시작시간이 slot 등록(started_at)보다
+        10s 이상 뒤면 PC 재부팅 등으로 같은 pid 를 다른 claude.exe 가 재할당한
+        것 → stale 로 판정. (2026-07-07 대표님 지적 '어제 터미널이 남아있음'.)
+        WT 창 닫힘 좀비: claude.exe 가 백그라운드로 살아남아도 붙었던 터미널
+        창(hwnd) 소유자가 slot pid 가 아니면(다른 proc 로 재할당) dead.
+        (2026-07-07 대표님 지적 '1번 터미널 없는데 텔레그램엔 살아있다'.)"""
         pid = target.get("pid")
         hwnd = target.get("hwnd")
         if pid:
-            from ..core.proc_win import name_of
-            return name_of(pid) == "claude.exe"
+            from ..core.proc_win import name_of, create_time, hwnd_owner_pid
+            if name_of(pid) != "claude.exe":
+                return False
+            started = target.get("started_at")
+            if started:
+                try:
+                    from datetime import datetime
+                    reg_t = datetime.fromisoformat(started).timestamp()
+                    ct = create_time(pid)
+                    if ct is not None and ct > reg_t + 10:
+                        return False
+                except Exception:
+                    pass
+            if hwnd:
+                owner = hwnd_owner_pid(hwnd)
+                if owner is not None and owner != int(pid):
+                    return False
+            return True
         return bool(hwnd and user32.IsWindow(hwnd))
 
     def inject(self, target: dict, text: str, background: bool = False) -> InjectResult:
