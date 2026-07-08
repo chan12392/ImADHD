@@ -7,8 +7,7 @@ def test_build_commands_6():
     cmds = build_commands(6)
     assert [c["command"] for c in cmds] == [
         "1", "2", "3", "4", "5", "6",
-        "list", "new", "open", "close", "stop",
-        "use", "label", "doctor",
+        "list", "new", "open", "close", "stop", "use", "label", "doctor",
         "update_adhd", "help", "pin",
     ]
     assert cmds[0]["description"] == "1번 터미널로 메시지 전송"

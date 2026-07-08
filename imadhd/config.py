@@ -16,16 +16,6 @@ def _data_dir_default() -> Path:
     return Path.home() / ".imadhd"
 
 
-def _default_transport() -> str:
-    """IMADHD_TRANSPORT 미설정 시 플랫폼 기본 transport.
-
-    Windows→sendkeys_win, Linux/POSIX→tmux_linux. install.py:155 의 .env 기록
-    로직과 동일. README/.env.example 의 "자동 감지" 문서와 일치하도록 2026-07-08
-    추가(이전엔 미설정 시 무조건 sendkeys_win 이라 Linux 배포가 깨졌다).
-    """
-    return "sendkeys_win" if os.name == "nt" else "tmux_linux"
-
-
 @dataclass
 class Settings:
     bot_token: str
@@ -42,7 +32,7 @@ class Settings:
         # IMADHD_ENV_FILE: 공유(gdrive 등) repo 경로와 머신별 설정을 분리하기 위한
         # 명시적 오버라이드. 여러 머신이 같은 repo 경로를 공유(예: gdrive 동기화)
         # 하면 cwd 탐색이 서로 다른 머신의 .env 를 덮어쓸 위험이 있다
-        # (2026-07-05 실사고: 다른 머신 설정이 gdrive 동기화로 데스크톱
+        # (2026-07-05 실사고: Linux 배포 설정이 gdrive 동기화로 데스크톱
         # 백호 .env 를 덮어씀). env_path 인자보다 우선.
         forced = os.environ.get("IMADHD_ENV_FILE", "").strip()
         if forced:
@@ -91,7 +81,7 @@ class Settings:
             allowed_chat_id=allowed,
             max_slots=int(os.environ.get("IMADHD_MAX_SLOTS", "6")),
             data_dir=data_dir,
-            transport=os.environ.get("IMADHD_TRANSPORT", "").strip() or _default_transport(),
+            transport=os.environ.get("IMADHD_TRANSPORT", "sendkeys_win").strip() or "sendkeys_win",
             reply_marker=os.environ.get("IMADHD_REPLY_MARKER", "[A.D.H.D]").strip() or "[A.D.H.D]",
             allow_any_chat=allow_any,
             route_all_asks=route_all_asks,

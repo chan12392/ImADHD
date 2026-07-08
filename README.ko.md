@@ -30,11 +30,9 @@ Windows Terminal이나 Stream Deck 런처를 쓰면서 기존 Claude Code 창을
 ---
 
 ## 상태
-`v0.3.9` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
+`v0.3.7` — **크로스플랫폼**(Windows `pipe_win` 기본 + `sendkeys_win` 폴백, Linux `tmux_linux`). 단일 머신(라우터와 터미널이 같은 호스트).
 
 ### 새 소식
-- **`v0.3.9`** — **Linux 패리티**: `/stop`이 Linux에서 동작(기존 Windows 전용 — `TmuxLinuxTransport.send_key`가 `C-c` 전송); tmux 세션명을 `IMADHD_TMUX_PREFIX`로 설정 가능(기본 `claude`, 중립명 — 특정 세션명 하드코딩 제거); `IMADHD_TRANSPORT` 미설정 시 **플랫폼 자동 감지**(`nt`→`sendkeys_win`, POSIX→`tmux_linux`) — Linux에 깐 상태가 더 이상 Windows transport를 기본으로 잡지 않음; Linux `step1_pm2` 설치 단계가 `imadhd-watchdog`도 기동(런타임 2차 방어, 기존 Windows 전용); `tmux_pane` 없는 레거시/resume 슬롯의 `/close`가 폴백 세션까지 kill(기존엔 좀비 세션 잔존); 주입 Lock을 pane별로 분리(기존 전역 단일 Lock이 모든 세션을 직렬화). Windows 코드 변경 없음.
-- **`v0.3.8`** — **사진 라우팅 팝업**: 번호/sticky/pending 없이 온 사진이 타겟 불명(활성 0 또는 2+ 개)일 때 기존엔 조용히 사라졌는데, 이제 "↘️ 어느 터미널로 보낼까?" 인라인 버튼이 팝업 → 탭하면 해당 슬롯으로 라우팅(사진 10분 TTL 대기).
 - **`v0.3.7`** — **`/close` 다중·전체 종료**: 기존 단일 `/close N`에 더해 `/close N M …`(공백 다중), `/close N,M,…`(콤마 다중, 띄어쓰기 혼합 OK), `/close all`(활성 슬롯 전체) 지원. 다중 종료는 슬롯별 kill 후 결과를 한 줄로 요약 송신(스팸 방지), 중복 번호 자동 제거. **번호 없는 본문 라우팅 팝업**: 번호/sticky/pending 없이 온 본문이 타겟 불명(활성 0 또는 2+ 개)일 때 기존엔 조용히 사라졌는데, 이제 "↘️ 어느 터미널로 보낼까?" 인라인 버튼이 팝업 → 탭하면 해당 슬롯으로 주입(본문 10분 TTL 대기). 활성 1개면 종전대로 자동 주입.
 - **`v0.3.6`** — **PreToolUse 훅 통합(5→4)**: 두 `PreToolUse` 엔트리(`AskUserQuestion`용 `ask_hook`, `Bash|Write|Edit`용 `perm_hook`) → stdin을 1회만 파싱하고 `tool_name`으로 분기하는 단일 `dispatch_hook` 엔트리로 병합. 동작 변화 없음. `install` 재실행 시 기존 설치를 자동 마이그레이션(더블 발화 충돌 방지용 레거시 개별 엔트리 스크럽). **`/new`(`/clear`) 직후 회신/첨부 누락 수정**: `/clear` 직후 CC `session_id`가 바뀌지만 `SessionStart` 훅은 재발화하지 않아 registry 매핑이 stale id에 고정 → 역방향 회신(`reply_hook`)이 누락되어("이미지가 안 보내져") 인식됨. `busy_hook`(`UserPromptSubmit`)가 new `session_id`를 가장 먼저 관측하므로, `cwd` 매칭으로 슬롯 매핑 + `marker_pending`을 자가치유하도록 수정.
 - **`v0.3.5`** — **진행 보드**: 작업중인 슬롯마다 실시간 `🟡 N번 작업중 (Xs)` 카운터(1초 갱신, idle 전환 시 자동 삭제; 완료 결과는 별도 답장 DM으로 그대로 도착)를 **무음(silent)**으로 게시합니다. 더해 `perm_hook` 로그/입력 강화(sha256 지문 + `html.escape`, 동작 변화 없음).
@@ -202,8 +200,7 @@ Claude Code 창을 엽니다(Windows) 또는 `tmux` attach + Claude Code 실행(
 | `TELEGRAM_ALLOWED_CHAT_ID` | **예** | 본인 Telegram 사용자 id — [@userinfobot](https://t.me/userinfobot)에서 확인 |
 | `IMADHD_MAX_SLOTS` | 아니오 | 최대 번호 터미널 수(기본 `6`) |
 | `IMADHD_DATA_DIR` | 아니오 | 런타임 데이터 디렉토리(기본 `~/.imadhd`) |
-| `IMADHD_TRANSPORT` | 아니오 | 입력 전송 — `pipe_win`(Windows, 포커스 无, **권장**), `sendkeys_win`(Windows, 포커스 강탈 폴백), `tmux_linux`(Linux). **미설정 시 플랫폼 자동 감지**(`nt`→`sendkeys_win`, POSIX→`tmux_linux`); `install`이 감지된 값을 `.env`에도 기록. `.env` 값이 최우선이며 ambient env var를 덮어씁니다. |
-| `IMADHD_TMUX_PREFIX` | 아니오 | Linux 전용: `/open`이 만드는 tmux 세션명 prefix 및 `tmux_pane` 없는 슬롯의 주입/`/close`/`/stop` 폴백 타겟(기본 `claude`). 기존 tmux 세션명에 맞춰 설정. |
+| `IMADHD_TRANSPORT` | 아니오 | 입력 전송 — `pipe_win`(Windows, 포커스 无, **권장**), `sendkeys_win`(Windows, 포커스 강탈 폴백), `tmux_linux`(Linux). `.env` 값이 최우선이며 ambient env var를 덮어씁니다. |
 | `IMADHD_REPLY_MARKER` | 아니오 | 레거시 보조 신호(기본 `[A.D.H.D]`). 답장 라우팅은 프롬프트의 마커가 아닌 주입 시점의 **pending 플래그**로 구동 — 구 주입 경로용 폴백일 뿐. |
 | `IMADHD_INJECT_METHOD` | 아니오 | Windows 전용: `paste`(clipboard+Ctrl+V, 빠름, 기본) 또는 `type`(문자별 SendInput, 레거시) |
 | `IMADHD_SKIP_PERMS` | **아니오 — 위험** | Linux 전용: `1`이면 Claude Code를 `--dangerously-skip-permissions`로 실행. 기본 off — Telegram 토큰 탈취 시 호스트에서 임의 명령이 가능함을 감수할 때만. |
@@ -251,7 +248,7 @@ pm2 logs imadhd      # 예상: "router start: slots=6 ..."
 ## 플랫폼 메모
 
 - **Windows** — `pipe_win`(기본)이 Telegram 입력을 named pipe로 보내 `host.py` PTY-bridge에 넣어, 입력이 **포커스를 뺏지 않고** 터미널에 도착. 봇의 `/open` 명령으로 터미널을 열면 자동으로 `host.py` 아래 시작됩니다. `sendkeys_win`은 레거시 폴백: 대상을 먼저 전경으로 강제하는 ctypes 네이티브 `send_keys` — `IMADHD_TRANSPORT=sendkeys_win`으로 선택. `sendkeys_win`의 경우 `IMADHD_INJECT_METHOD=paste`(clipboard+Ctrl+V, 기본)가 문자별 `type`보다 훨씬 빠름.
-- **Linux** — 입력은 `SessionStart`에 캡처한 pane으로 `tmux send-keys`. 각 Claude Code 세션은 자기만의 tmux session/pane에서 실행, 레지스트리가 올바른 대상을 가리키기 위해 `tmux_pane`을 추적. `IMADHD_TRANSPORT` 미설정 시 POSIX에서 `tmux_linux`로 자동 감지. `/open`은 `<IMADHD_TMUX_PREFIX>-<unixtime>` 이름의 세션 생성(기본 prefix `claude`); `/stop`은 `C-c` 전송으로 작업 중단; `/close`는 세션을 kill(`tmux_pane` 없는 레거시 슬롯은 prefix 세션으로 폴백). 설치가 Linux에서도 `imadhd-watchdog`(heartbeat-stale 자가복구)을 기동 — Windows와 동일.
+- **Linux** — 입력은 `SessionStart`에 캡처한 pane으로 `tmux send-keys`. 각 Claude Code 세션은 자기만의 tmux session/pane에서 실행, 레지스트리가 올바른 대상을 가리키기 위해 `tmux_pane`을 추적. `IMADHD_TRANSPORT` 미설정 시 자동 감지.
 
 ## 확장
 - **새 입력 방식**(ssh / pty): `Transport.inject()`를 구현하는 `imadhd/transports/yourmethod.py` 추가. 코어 미수정.

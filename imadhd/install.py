@@ -279,15 +279,6 @@ def step1_pm2_linux() -> None:
     else:
         _run(f'pm2 start "{PYTHON}" --name imadhd --cwd "{REPO_DIR}" -- -X utf8 -m imadhd.cli router')
         _ok("router 기동")
-    # watchdog 기동 (멱등) — 런타임 2차 방어. 2026-07-08: Windows 분기에만 있던
-    # imadhd-watchdog 기동을 Linux 에도 추가(이전엔 Linux 배포가 heartbeat-stale
-    # 좀비 상태에 무방비). watchdog.py 자체는 platform 무관(Settings + pm2
-    # restart shell=True)이라 Linux 에서 정상 동작.
-    if _pm2_has("imadhd-watchdog"):
-        _ok("watchdog 이미 online")
-    else:
-        _run(f'pm2 start "{PYTHON}" --name imadhd-watchdog --cwd "{REPO_DIR}" -- -X utf8 -m imadhd.cli watchdog')
-        _ok("watchdog 기동 (heartbeat-stale 런타임 2차 방어)")
     _run("pm2 save")
     _ok("pm2 dump 저장 (재부팅 시 복원 대상)")
 

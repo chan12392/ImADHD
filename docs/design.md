@@ -156,35 +156,6 @@
   `keybd_event` keydown/keyup.
 - 봇 메뉴(setMyCommands) 및 `/help` 텍스트에 반영 완료.
 
-### 4.6c tmux_linux transport — `imadhd/transports/tmux_linux.py` (2026-07-08 명세)
-- 위치: `imadhd/transports/tmux_linux.py`. Linux 배포 전용 transport.
-- 핵심 교훈(2026-07-03 기존 tmux poller LIVE 검증 이식):
-  1. `send-keys -l` 은 한글 UTF-8 을 키 시퀀스로 보내 IME 조합 lock 유발 → 반드시
-     `load-buffer` + `paste-buffer` 사용.
-  2. CC 가 busy(응답 생성중)일 때 주입하면 Enter 가 씹혀 텍스트만 잔류(stuck) →
-     주입 전 idle 대기 필수. C-c 는 CC 세션 자체를 죽이므로 **주입 경로**에선 절대
-     사용 금지(`/stop` 중단 경로는 예외 — 아래 참고).
-- 주입 흐름(`inject` → `_inject_worker`, 비동기 백그라운드 스레드):
-  - 동기 `inject` 는 `has-session` 으로 dead 만 가볍게 확인 후 즉시 반환. 이 이상
-    (`_wait_idle` 의 최대 45s busy-polling)을 동기로 돌리면 2026-07-05 실사고
-    ("ping 보내고 답 없어서 다시 물으니 그제서야 pong")가 재발(라우터 폴링 정지).
-  - `_inject_worker`: `_wait_idle` → `_paste_inject`, 최대 4회 재시도(busy race 첫 주입
-    실패 → 메시지 유실 회복, 2026-07-07 Linux 첫 메시지 유실 사고).
-  - `_paste_inject`: load-buffer → paste-buffer 직전 `_state != "idle"` 재확인(TOCTOU race
-    보호) → paste 후 stuck 판정 → `("Enter","C-j","Enter","C-j")` 4회 번갈아 제출 시도
-    (CC TUI 가 Enter(C-m) submit 을 간헐 무시하고 C-j(LF) 만 인식, 2026-07-07 stuck 사고).
-- `/stop`(중단) — `send_key(target, VK_ESCAPE)` override(2026-07-08 추가). ESC(0x1B) →
-  `tmux send-keys C-c`. **주입 컨텍스트의 "C-c 금지"와 다름**: 그건 idle 보장 안 된
-  상태에서 잘못 보내 CC 를 죽이는 실사고였고, 여긴 살아있는 CC 에 중단 의도로 보내는
-  것. C-c 는 현재 generation/tool 을 중단하지 세션 자체를 종료하진 않음.
-- 타겟 해석(`_resolve_target`): `target["tmux_pane"]` 우선 → 빈 값이면
-  `IMADHD_TMUX_PREFIX`(기본 `claude`) 폴백. 2026-07-08: 특정 배포 전용 세션명 하드코딩 제거, 중립 기본값.
-- Lock: **pane(target)별 Lock**(2026-07-08). 이전 전역 단일 Lock 은 서로 다른 세션까지
-  직렬화해 다중 세션 처리를 지연시켰음.
-- `is_alive`: `has-session` 만. list-panes 의 `pane_current_command` 로 "claude" 검사는
-  CC 가 Bash 툴 실행 중 foreground proc 이 일시적 bash/python3/ssh 로 바뀔 때마다 dead
-  오판을 냄(2026-07-05 실사고 "/open 빼고 전부 안 됨" — 살아있는 세션 슬롯이 계속 release 됨).
-
 ### 4.6c 연결/종료 알림 제거 + `/list` 창 제목 표시 (2026-07-04, 대표님 피드백)
 - **배경**: "N번 터미널 연결됨/종료" 자동 알림이 채팅을 지저분하게 만든다는 대표님 지적(처음엔
   무음 전송으로 완화 시도 → 재지적 받고 아예 제거로 정정).
@@ -281,9 +252,8 @@ ImADHD/                             # 레포 루트
     │   └── router.py               # 텔레그램 폴링 + 라우팅 메인루프
     ├── transports/                 # ★확장포인트1: 터미널 입력 방식
     │   ├── base.py                 # Transport ABC: inject(target, text) -> InjectResult
-    │   ├── sendkeys_win.py         # Windows ctypes send_keys
-    │   ├── pipe_win.py             # Windows named-pipe (focus-less, host.py PTY-bridge)
-    │   └── tmux_linux.py           # Linux tmux load-buffer/paste-buffer + idle 대기
+    │   ├── sendkeys_win.py         # Windows ctypes send_keys (기본)
+    │   └── (future: tmux.py / pty.py)
     ├── commands/                   # ★확장포인트2: 텔레그램 명령
     │   ├── base.py                 # Command ABC: match(msg)->bool, handle(...)
     │   ├── inject_command.py       # N️⃣<본문> → 사전체크 → 주입 → ack
