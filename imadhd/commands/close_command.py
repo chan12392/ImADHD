@@ -76,13 +76,24 @@ class CloseCommand(Command):
         if os.name == "nt":
             kill_target = find_tab_root(info.pid) or fallback_pid
             killed = terminate_tree(kill_target)
-        elif os.name == "posix" and getattr(info, "tmux_pane", ""):
+        elif os.name == "posix":
+            # tmux_pane 있으면 그 pane → session name → kill-session.
+            # tmux_pane 빈 슬롯(구버전/resume/수동 tmux attach 로 시작된 CC)은
+            # 2026-07-08 이전엔 이 분기 자체를 안 타 → killed=False → 좀비 tmux
+            # 세션 잔존(슬롯만 release). 폴백 타겟(IMADHD_TMUX_PREFIX 세션)으로
+            # kill-session 시도해 잔존 세션까지 닫는다.
+            pane = getattr(info, "tmux_pane", "") or ""
             try:
-                r = subprocess.run(
-                    ["tmux", "display-message", "-p", "-t", info.tmux_pane, "#S"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                sess = (r.stdout or "").strip()
+                if pane:
+                    r = subprocess.run(
+                        ["tmux", "display-message", "-p", "-t", pane, "#S"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    sess = (r.stdout or "").strip()
+                else:
+                    # 폴백: IMADHD_TMUX_PREFIX 기본 세션(단일 세션 가정).
+                    from ..transports.tmux_linux import TMUX_TARGET as _fallback
+                    sess = _fallback
                 if sess:
                     subprocess.run(["tmux", "kill-session", "-t", sess], timeout=10)
                     killed = True

@@ -37,11 +37,21 @@ def _handle_linux(monkeypatch, text, fixed_time=1783300000):
 
 
 def test_linux_open_bare_creates_named_tmux_session(monkeypatch):
+    """2026-07-08: 기본 prefix 'claude'(중립명). 특정 배포 전용 하드코딩 제거."""
+    monkeypatch.delenv("IMADHD_TMUX_PREFIX", raising=False)
     captured, tg = _handle_linux(monkeypatch, "/open")
     assert captured["args"][:4] == ["tmux", "new-session", "-d", "-s"]
-    assert captured["args"][4] == "chleo-1783300000"
+    assert captured["args"][4] == "claude-1783300000"
     assert "claude" in captured["args"][5]
-    assert "chleo-1783300000" in tg.sent[-1]
+    assert "claude-1783300000" in tg.sent[-1]
+
+
+def test_linux_open_prefix_env_override(monkeypatch):
+    """IMADHD_TMUX_PREFIX=custom 시 기존 세션명 유지(마이그레이션)."""
+    monkeypatch.setenv("IMADHD_TMUX_PREFIX", "mybot")
+    captured, tg = _handle_linux(monkeypatch, "/open")
+    assert captured["args"][4] == "mybot-1783300000"
+    assert "mybot-1783300000" in tg.sent[-1]
 
 
 def test_linux_open_uses_home_cwd(monkeypatch):
