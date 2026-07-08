@@ -37,7 +37,7 @@ _NEW_PROC_GROUP = 0x200
 
 # /open 중복 spawn 가드(2026-07-07): 라우터가 409 Conflict(같은 봇 토큰 폴링 충돌)
 # 로 동일 update 를 중복 처리하거나 대표님이 더블 탭할 때 tmux 세션이 1초 차로
-# 2개 spawn 되는 현상 방지(Linux 실사고: 타임스탬프가 1초 차로 2개 spawn).
+# 2개 spawn 되는 현상 방지(오라클 실사고: 06:59:07/08 chleo-1783407547/7548).
 # 단일 라우터 프로세스 내 모듈 변수로 debounce.
 _LAST_OPEN_MONO: float = 0.0
 _OPEN_DEBOUNCE_SEC: float = 3.0
@@ -87,7 +87,7 @@ def build_open_env(base_env: dict) -> dict:
 
 
 def build_linux_launch_cmd() -> str:
-    """Linux(tmux) 새 세션용 claude 실행 커맨드 문자열.
+    """오라클(tmux) 새 세션용 claude 실행 커맨드 문자열.
 
     보안:
     - --dangerously-skip-permissions는 기본 off. IMADHD_SKIP_PERMS=1 일 때만.
@@ -144,13 +144,9 @@ class OpenCommand(Command):
             )
             return
 
-        # 세션명 = prefix + 타임스탬프. 같은 초 더블 /open 은 handle 진입의
+        # 세션명 = 타임스탬프. 같은 초 더블 /open 은 handle 진입의
         # _OPEN_DEBOUNCE_SEC debounce 가 먼저 차단 → 세션명 충돌/2세션 spawn 없음.
-        # prefix = IMADHD_TMUX_PREFIX(기본 'claude'). tmux_linux.py 폴백 타겟과 동일 변수.
-        # 2026-07-08: 특정 배포 전용 세션명 하드코딩 → env 일반화. 기존
-        # 세션명 유지하려면 IMADHD_TMUX_PREFIX=<이름> 설정.
-        prefix = os.environ.get("IMADHD_TMUX_PREFIX", "claude")
-        session_name = f"{prefix}-{int(time.time())}"
+        session_name = f"chleo-{int(time.time())}"
         launch_cmd = build_linux_launch_cmd()
         try:
             subprocess.run(["tmux", "new-session", "-d", "-s", session_name, launch_cmd],
