@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.9 — 2026-07-08
+- **Linux 패리티 — Windows 코드 미수정**. Linux(tmux_linux) 경로만 수정하여 Windows 배포에 영향 0. (배경: Windows는 정상 작동 중, Linux 배포가 Windows 기반으로만 동작하는 기능들이 있어 패리티 부재.)
+- **`/stop` Linux 지원** — `TmuxLinuxTransport.send_key` 추가. Windows(sendkeys_win)의 ESC 전송을 Linux/tmux에서도 지원. `VK_ESCAPE` → `tmux send-keys C-c`. (이전엔 `send_key` override 가 없어 `NotImplementedError` → Linux /stop 완전 미동작.) 주입 컨텍스트의 "C-c 금지(CC 세션 종료)"와 다름 — 중단은 살아있는 CC 에 대한 의도적 SIGINT.
+- **`IMADHD_TMUX_PREFIX` 일반화** — `tmux_linux.py` 폴백 타겟 기본값이 특정 배포 전용 명명으로 하드코딩 → env 변수 `IMADHD_TMUX_PREFIX`(기본 중립 `claude`). `/open` 세션명 `<prefix>-<ts>`. 기존 세션명 유지하려면 `IMADHD_TMUX_PREFIX=<이름>` 설정(마이그레이션 경로).
+- **transport 플랫폼 자동감지** — `config.py` `IMADHD_TRANSPORT` 미설정 시 `os.name` 으로 자동감지(`nt`→`sendkeys_win`, POSIX→`tmux_linux`). install.py:155 `.env` 기록 로직과 동일. 이전엔 미설정 시 무조건 `sendkeys_win` 이라 Linux 배포가 깨졌다(README/.env.example 의 "자동 감지" 문서와 모순).
+- **`/close` tmux_pane 빈 슬롯 폴백** — 레거시/resume/수동 tmux attach 슬롯(tmux_pane 빈)은 posix 분기를 안 타 `killed=False` → 좀비 tmux 세션 잔존(슬롯만 release). 이제 폴백 타겟(prefix 세션)으로 kill-session 시도.
+- **pane별 주입 Lock** — `tmux_linux.py` 전역 단일 `_inject_lock` → pane(target)별 Lock dict. 이전엔 서로 다른 tmux pane 도 모두 직렬화돼 한 세션 45s busy 대기 중 다른 세션 주입이 전부 대기(다중 세션 지연).
+- **Linux `step1_pm2` watchdog 기동** — `install.py` Linux 분기에 `imadhd-watchdog` 멱등 기동 추가(기존 Windows 분기만). `watchdog.py` 자체는 platform 무관(Settings + `pm2 restart imadhd` shell=True)이라 Linux 정상 동작. heartbeat-stale 좀비 2차 방어 확보.
+- **문서 동기화** — README.md/README.ko.md: v0.3.9, Linux 단계(watchdog/systemd/prefix/auto-detect) 정정, `IMADHD_TMUX_PREFIX` env table 추가. `.env.example`: `IMADHD_TMUX_PREFIX` 추가, transport 자동감지 주석 사실화. `docs/design.md`: `(future: tmux.py)` → `tmux_linux.py` 현행 명세(4.6c) 갱신.
+- **검증**: pytest 406 passed. `git diff` 로 `host.py`/`pipe_win.py`/`sendkeys_win.py`/`proc_win.py` Windows 분기 변경 0 확인.
+
 ## 0.3.8 — 2026-07-07
 - **번호 없는 이미지 → 라우팅 팝업 확장** — 0.3.7의 "↘️ 어느 터미널로?" 팝업을 텍스트 본문뿐 아니라 **이미지**에도 적용. 활성 터미널이 2개+이고 sticky·pending·번호 접두 없이 이미지를 올리면, 종전엔 `_handle_photo`가 `num=None`로 주입을 스킵해 "전송 안 됨"으로 인식됐음. 이제 이미지는 inbox에 저장(백업 보존)한 뒤 "↘️ 이 이미지를 어느 터미널로?" 인라인 버튼 팝업 송신 → 탭 시 해당 슬롯으로 경로 주입. 활성 0이면 "열린 터미널 없음" 안내(이미지는 저장됨). 구현상 `route_pending` 스키마를 `tuple[body,ts]` → `dict{kind:text|photo, body, ts}`로 일반화(`r:` 콜백이 kind 무관하게 동일 주입).
 - **검증**: pytest 381 passed.
