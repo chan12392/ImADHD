@@ -1,12 +1,13 @@
 """reply_hook 순수 로직 테스트.
 
-2026-07-06 전환: 마커 echo 의존 제거. marker_missing → reply_too_long(길이 게이트).
-회신 결정은 reply_hook main이 pending 플래그로 하므로 여기선 길이 판정만.
+회신 결정: 마지막 user 메시지의 reply_marker([A.D.H.D]) 유무로 출처 판정.
+마커 있으면 텔레그램 인입 답 → 회신. 없으면 데스크톱 직접 → 스킵(2026-07-09).
 """
 from imadhd.hooks.reply_hook import (
     reply_too_long,
     last_user_text_from_entries,
     _is_external_user_message,
+    _origin_has_marker,
     _extract_images,
     _last_assistant_images,
     REPLY_HARD_LIMIT,
@@ -66,6 +67,47 @@ def test_is_external_user_message_true_for_text():
 
 def test_is_external_user_message_false_for_tool_result_only():
     assert _is_external_user_message(_user_tool_result_only()) is False
+
+
+# ---------- 출처 마커 게이트 (2026-07-09: TG 답만 회신) ----------
+
+def test_origin_has_marker_true_for_tg_inject():
+    """텔레그램 주입(inject_command가 마커 부착) → 회신."""
+    last_user = f"작업해줘 {MARKER}"
+    assert _origin_has_marker(last_user, MARKER) is True
+
+
+def test_origin_has_marker_false_for_desktop_direct():
+    """데스크톱 앱/터미널 직접 타이핑(마커 없음) → 회신 스킵."""
+    assert _origin_has_marker("그냥 직접 친 질문", MARKER) is False
+
+
+def test_origin_has_marker_false_for_empty():
+    assert _origin_has_marker("", MARKER) is False
+    assert _origin_has_marker(None, MARKER) is False  # type: ignore[arg-type]
+
+
+def test_origin_has_marker_via_entries_pipeline():
+    """entries → last_user_text_from_entries → _origin_has_marker 전체 파이프라인.
+    tool_result-only user round 를 건너뛰고 진짜 user 발화에서 마커 판정."""
+    entries = [
+        _user(f"텔레그램에서 보낸 요청 {MARKER}"),
+        _assistant("작업 중"),
+        _user_tool_result_only(),
+        _assistant("완료"),
+    ]
+    last_user = last_user_text_from_entries(entries)
+    assert _origin_has_marker(last_user, MARKER) is True
+
+
+def test_origin_has_marker_desktop_via_entries_pipeline():
+    """데스크톱 직접 작업 entries → 마커 없음 → 회신 스킵."""
+    entries = [
+        _user("데스크톱에서 직접 친 질문"),
+        _assistant("답변"),
+    ]
+    last_user = last_user_text_from_entries(entries)
+    assert _origin_has_marker(last_user, MARKER) is False
 
 
 # ---------- image 추출 (CC→TG) ----------

@@ -1,7 +1,9 @@
 """UserPromptSubmit 훅: CC가 사용자 입력을 받으면 즉시 busy(📝) 표시.
 
-터미널에서 직접 타이핑해도(텔레그램 경유 아님) 즉시 busy.
-대표님 요청: "터미널 작업중이면 텔레그램에 busy — 텔레그램 소통 없어도."
+출처 게이트(2026-07-09): payload 의 prompt 에 reply_marker([A.D.H.D])가
+있을 때만 busy — 텔레그램 인입(inject_command 가 마커 부착) 작업만 텔레그램에
+"N번 작업중" 카운터로 표시. 데스크톱 앱/터미널 직접 타이핑(마커 없음)은
+busy 안 됨 → progress_board/pin_board 에 안 뜸.
 
 동작:
   - session_id 가 registry 에 등록된 슬롯이면 status="busy".
@@ -28,6 +30,12 @@ def _debug_log(line: str) -> None:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def _prompt_has_marker(prompt: str, marker: str) -> bool:
+    """UserPromptSubmit payload 의 prompt 에 reply_marker 가 있는지(=텔레그램 인입).
+    마커 없으면 데스크톱 앱/터미널 직접 타이핑 → busy 안 됨 → 텔레그램 카운터 안 뜸."""
+    return bool(marker) and marker in (prompt or "")
 
 
 def _heal_session_drift(reg, data_dir, new_sid: str, cwd: str) -> bool:
@@ -89,6 +97,7 @@ def main() -> int:
     if not session_id:
         return 0
     cwd = payload.get("cwd", "") or ""
+    prompt = payload.get("prompt", "") or ""
 
     from ..config import Settings
     from ..core.registry import JSONFileRegistry
@@ -101,6 +110,12 @@ def main() -> int:
     except Exception as e:
         _debug_log(f"[busy] Settings.load failed session={session_id[:8]} err={e!r}")
         return 0
+
+    # 출처 게이트: prompt 에 reply_marker 가 있어야 busy(텔레그램 인입).
+    # 데스크톱 앱/터미널 직접 타이핑(마커 없음)은 busy 안 됨 → 텔레그램 카운터 안 뜸.
+    # 단, /clear 드리프트 치유는 마커 무관(출처와 관계없이 발생) → 게이트 전에 수행.
+    is_tg_inject = _prompt_has_marker(prompt, s.reply_marker)
+
     try:
         reg = JSONFileRegistry(s.registry_path, s.max_slots)
         if not reg.find_by_session(session_id):
@@ -110,8 +125,13 @@ def main() -> int:
             # (=텔레그램 "전송 안 됨"). 같은 cwd 슬롯 session_id·marker 를 new 로 갱신.
             if _heal_session_drift(reg, s.data_dir, session_id, cwd):
                 _debug_log(f"[busy] drift healed session={session_id[:8]} cwd={cwd!r}")
-        if reg.find_by_session(session_id):
+        if is_tg_inject and reg.find_by_session(session_id):
             reg.set_status_by_session(session_id, "busy")
+        elif not is_tg_inject:
+            _debug_log(
+                f"[busy] no marker in prompt ({s.reply_marker}) — desktop direct, "
+                f"skip busy session={session_id[:8]}"
+            )
     except Exception as e:
         _debug_log(f"[busy] registry update failed session={session_id[:8]} err={e!r}")
     return 0

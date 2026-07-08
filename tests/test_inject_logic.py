@@ -45,8 +45,8 @@ def test_inject_alive_injects_body_only(tmp_path):
     InjectCommand().handle(Message("42", "1️⃣ do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    # 본문만 그대로 주입. 마커/표식은 붙지 않는다(CC 프롬프트 투명).
-    assert text == "do work"
+    # 본문 + reply_marker 부착(reply_hook 출처 판정용).
+    assert text == "do work [A.D.H.D]"
     assert "\n" not in text                           # 한 줄 주입 (분할 방지)
 
 
@@ -105,7 +105,7 @@ def test_do_inject_consumes_body(tmp_path):
     do_inject(ctx, 1, "안녕 백호", "42")
     assert tr.injected is not None
     _, text = tr.injected
-    assert text == "안녕 백호"
+    assert text == "안녕 백호 [A.D.H.D]"
 
 
 def test_slash_injects_body(tmp_path):
@@ -119,7 +119,7 @@ def test_slash_injects_body(tmp_path):
     cmd.handle(Message("42", "/1 do work", {}), ctx)
     assert tr.injected is not None
     _, text = tr.injected
-    assert text == "do work"
+    assert text == "do work [A.D.H.D]"
 
 
 def test_slash_no_space_injects(tmp_path):

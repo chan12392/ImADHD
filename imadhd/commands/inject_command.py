@@ -125,9 +125,11 @@ def do_inject(ctx: CommandContext, num: int, body: str, chat_id: str) -> None:
     _debug_log(f"[inject] num={num} hwnd={info.hwnd} pid={info.pid} session={info.session_id[:8]}")
     # 한 줄 주입: \n은 CC 터미널에서 Enter(제출)로 작동해 분할되므로 제거
     body = _normalize_question(" ".join(body.split()) or "(빈 입력)")
-    # CC 프롬프트에 마커/표식 안 붙임 — CC는 텔레그램 인입 사실을 모름.
-    # 회신 결정·길이 교정은 전부 reply_hook(Stop)이 transcript uuid dedup 로 처리.
-    inject_text = body
+    # 텔레그램 인입 표식: user 메시지 끝에 reply_marker([A.D.H.D]) 부착.
+    # reply_hook(Stop)이 마지막 user 메시지의 마커를 보고 텔레그램 회신 여부 결정.
+    # 마커 없는 턴 = 데스크톱 앱/터미널 직접 작업 → 회신 스킵(대표님 지시 2026-07-09).
+    # CC 답변 본문엔 마커가 안 섞임 — 마커는 user 메시지에만 붙음.
+    inject_text = f"{body} {ctx.settings.reply_marker}"
     ctx.registry.set_status(num, "busy")   # 📝 작업중 표시
 
     result = ctx.transport.inject(info.to_dict(), inject_text)

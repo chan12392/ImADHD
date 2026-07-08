@@ -1,11 +1,13 @@
-"""busy_hook._heal_session_drift 단위 테스트.
+"""busy_hook 단위 테스트.
 
-/clear 직후 session_id 드리프트 자가치유: 같은 cwd 슬롯의 session_id 를 new 로
-갱신(claim_slot) + marker_pending/<old> → /<new> 복사. fake registry 로 검증.
+1) _heal_session_drift: /clear 직후 session_id 드리프트 자가치유. 같은 cwd 슬롯의
+   session_id 를 new 로 갱신(claim_slot) + marker_pending/<old> → /<new> 복사.
+2) _prompt_has_marker: UserPromptSubmit prompt 의 reply_marker 유무 → 출처 판별.
+   마커 있으면 텔레그램 인입(busy), 없으면 데스크톱 직접(busy 안 됨).
 """
 from pathlib import Path
 
-from imadhd.hooks.busy_hook import _heal_session_drift
+from imadhd.hooks.busy_hook import _heal_session_drift, _prompt_has_marker
 
 
 class _Slot:
@@ -83,3 +85,23 @@ def test_heal_marker_absent_still_claims(tmp_path):
     ok = _heal_session_drift(reg, str(data_dir), "NEW-2222", "C:/proj")
     assert ok is True
     assert reg.claimed["session_id"] == "NEW-2222"
+
+
+# ---------- _prompt_has_marker (출처 게이트 2026-07-09) ----------
+
+MARKER = "[A.D.H.D]"
+
+
+def test_prompt_has_marker_true_for_tg_inject():
+    """텔레그램 주입(inject_command가 마커 부착) → busy."""
+    assert _prompt_has_marker(f"작업해줘 {MARKER}", MARKER) is True
+
+
+def test_prompt_has_marker_false_for_desktop_direct():
+    """데스크톱 앱/터미널 직접 타이핑(마커 없음) → busy 안 됨."""
+    assert _prompt_has_marker("그냥 직접 친 질문", MARKER) is False
+
+
+def test_prompt_has_marker_false_for_empty():
+    assert _prompt_has_marker("", MARKER) is False
+    assert _prompt_has_marker(None, MARKER) is False  # type: ignore[arg-type]

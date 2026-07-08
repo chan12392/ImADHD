@@ -1,12 +1,13 @@
-"""Stop 훅: CC 응답 종료 → transcript 마지막 assistant 답변 읽기 →
-마커 감지 → 회신 (session_id→번호 역조회, 숫자이모지 붙여 전송).
+"""Stop 훅: CC 응답 종료 → transcript 마지막 assistant 답변 읽기 → 회신.
 
-인입(inject_command 가 주입한) 메시지엔 마커가 있는데 CC 응답 마지막 줄에
-마커가 없으면(CLAUDE.md 규칙을 깜빡함) 조용히 통과하지 않고 Stop 을
-block 해서 마커를 다시 출력하게 한다 — 작업은 끝났는데 회신만 안 가는
-silent failure 방지(2026-07-04 실사고: 마커 누락으로 텔레그램 회신
-자체가 안 감. channel-reply-guard.py 와 동일 패턴을 이 훅에 흡수해
-별도 Stop 훅 프로세스를 추가하지 않음).
+회신 게이트: 마지막 user 메시지에 reply_marker([A.D.H.D])가 있어야 회신.
+inject_command 가 텔레그램 주입 시 user 메시지 끝에 마커를 부착하므로,
+마커가 있으면 텔레그램 인입 답 → 회신. 마커 없으면 데스크톱 앱/터미널
+직접 작업 → 회신 스킵(대표님 지시 2026-07-09: 텔레그램에서 보낸 메시지의
+답변만 텔레그램으로).
+
+2026-07-07 단순화(uuid dedup 1:1 파이프)는 유지 — 마커 게이트는 그 위에
+출처 구분 레이어를 추가. ask_hook 의 _origin_has_marker 와 동일 패턴.
 
 stdin: CC hook payload JSON (session_id, transcript_path, stop_hook_active).
 stop_hook_active=True 면 통과(무한루프 방지).
@@ -130,6 +131,16 @@ def last_user_text_from_entries(entries: list) -> str:
         if _is_external_user_message(entry):
             return _extract_text(_get_content(entry))
     return ""
+
+
+def _origin_has_marker(last_user_text: str, marker: str) -> bool:
+    """이번 turn 을 촉발한 user 메시지가 마커로 끝나는지(=텔레그램 인입 요청).
+    마커 없으면 데스크톱 앱/터미널 직접 작업 → 회신 스킵.
+    ask_hook._origin_has_marker 와 동일 패턴 — 여기선 이미 추출한 텍스트로 판정."""
+    for line in reversed((last_user_text or "").splitlines()):
+        if line.strip():
+            return marker in line
+    return False
 
 
 def _read_entries(transcript_path: str) -> list:
@@ -321,22 +332,30 @@ def main() -> int:
         _debug_log(f"[reply] no registry match session={session_id[:8]}")
 
     # 2026-07-07 대표님 단순화: 회신 = 1:1 파이프. CC 답 1개 → TG 1회신.
-    # marker/count/pending 판정 전부 폐지 — 메시지 개수 ≠ CC 답 개수(CC가 빠른 연속
-    # 메시지를 한 턴으로 묶음 처리) + Stop 훅 중복 발화(tool_use 후) 로
-    # off-by-one/중복/유실이 혼재. uuid dedup 만으로: 마지막 assistant 답(uuid)이 이미
-    # 텔레그램에 갔으면 skip, 아니면 sent + 기록. 직접 타이핑 턴도 회신(Linux 배포는
-    # 텔레그램 브릿지 전용 — CC 터미널 직접 작업 안 함).
+    # uuid dedup: 마지막 assistant 답(uuid)이 이미 텔레그램에 갔으면 skip.
+    # 2026-07-09 출처 게이트 추가: 마지막 user 메시지에 마커([A.D.H.D])가 있어야
+    # 회신 — 데스크톱 앱/터미널 직접 작업(마커 없음)은 텔레그램 회신 스킵.
+    # ask_hook 의 _origin_has_marker 와 동일 패턴.
     entries = _read_entries(transcript_path)
     last_uuid = _last_assistant_uuid(entries)
     too_long = reply_too_long(text)
     images = _last_assistant_images(entries)
+    last_user = last_user_text_from_entries(entries)
+    has_marker = _origin_has_marker(last_user, s.reply_marker)
     _debug_log(
         f"[reply] session={session_id[:8]} text_len={len(text)} "
         f"uuid={last_uuid[:8] or '-'} too_long={too_long} "
-        f"stop_hook_active={stop_hook_active} images={len(images)}"
+        f"stop_hook_active={stop_hook_active} images={len(images)} "
+        f"marker={has_marker}"
     )
     if not text and not images:
         _debug_log(f"[reply] no assistant text/image session={session_id[:8]}")
+        return 0
+    if not has_marker:
+        _debug_log(
+            f"[reply] no origin marker ({s.reply_marker}) — desktop direct, "
+            f"skip send session={session_id[:8]}"
+        )
         return 0
     if _already_sent(s.data_dir, session_id, last_uuid):
         _debug_log(f"[reply] dup uuid={last_uuid[:8]} skip session={session_id[:8]}")
