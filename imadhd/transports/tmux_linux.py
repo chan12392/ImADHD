@@ -1,6 +1,6 @@
-"""tmux 기반 입력 transport (Linux/Linux).
+"""tmux 기반 입력 transport (Linux).
 
-tmux-poller.py(2026-07-03 LIVE 검증) 의 상태감지·주입 로직을 그대로
+기존 tmux poller(2026-07-03 LIVE 검증) 의 상태감지·주입 로직을 그대로
 포팅. 핵심 교훈 2개:
   1. send-keys -l 은 한글 UTF-8 을 키 시퀀스로 보내 IME 조합 lock 유발 →
      반드시 load-buffer + paste-buffer 사용.
@@ -10,7 +10,7 @@ tmux-poller.py(2026-07-03 LIVE 검증) 의 상태감지·주입 로직을 그대
 
 target(registry SessionInfo.to_dict())의 hwnd/pid 는 이 transport 에서
 미사용(무의미) — target["tmux_pane"](세션별 tmux pane id)을 우선 쓰고,
-없으면(구버전 슬롯) IMADHD_TMUX_TARGET 환경변수(기본 'claude')로 폴백한다.
+없으면(구버전 슬롯) IMADHD_TMUX_PREFIX 환경변수(기본 'claude')로 폴백한다.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .base import InjectResult, Transport
 
-TMUX_TARGET = os.environ.get("IMADHD_TMUX_TARGET", "claude")
+TMUX_TARGET = os.environ.get("IMADHD_TMUX_PREFIX", "claude")
 
 
 def _resolve_target(target: dict | None) -> str:
@@ -38,7 +38,23 @@ def _resolve_target(target: dict | None) -> str:
 # 다시 물으니 그제서야 pong 도착"). 실제 주입은 백그라운드 스레드로 넘기고
 # 호출자(라우터 루프)는 즉시 반환받는다. 같은 pane 에 동시 두 스레드가
 # paste-buffer 하면 텍스트가 섞이므로 lock 으로 직렬화.
-_inject_lock = threading.Lock()
+#
+# 2026-07-08: 전역 단일 Lock → pane(target)별 Lock dict. 이전엔 서로 다른
+# tmux pane(세션)도 모두 직렬화돼, 한 세션의 45s busy 대기 중 다른 세션
+# 주입이 전부 대기했다(다중 세션 처리 지연). 서로 다른 pane 은 동시 주입해
+# 안전하므로 target 키로만 직렬화.
+_pane_locks: dict[str, threading.Lock] = {}
+_pane_locks_guard = threading.Lock()
+
+
+def _get_pane_lock(target: str) -> threading.Lock:
+    """target(tmux pane/session) 전용 Lock 조회. 없으면 생성."""
+    with _pane_locks_guard:
+        lk = _pane_locks.get(target)
+        if lk is None:
+            lk = threading.Lock()
+            _pane_locks[target] = lk
+        return lk
 
 # CC 응답생성 스피너로 판정할 프롬프트 부재 최대 대기(초). 이 시간 넘게
 # idle 이 안 되면 stuck 복구를 시도하되 계속 기다린다(호출자가 wait_idle 재호출).
@@ -119,7 +135,7 @@ def _state(target: str) -> str:
 
 def _wait_idle(target: str, timeout: float = 45.0) -> str:
     """idle 될 때까지 대기. stuck(이전 주입 잔재) 은 Enter → (그래도 stuck)
-    → C-j 순으로 복구 시도(tmux-poller.py 원본 로직 — 이 포팅에서 Enter
+    → C-j 순으로 복구 시도(기존 poller 원본 로직 — 이 포팅에서 Enter
     만 옮기고 C-j 폴백을 빠뜨렸던 버그를 2026-07-05 실사고로 발견해 복원.
     Enter 만으로 안 풀리는 stuck 이 실제로 있고, 그 상태로 영구 고착되면
     이후 모든 텔레그램 메시지가 이 pane 에 막혀 처리가 안 된다)."""
@@ -164,7 +180,7 @@ def _paste_inject(target: str, text: str) -> bool:
         time.sleep(0.2)
         if _state(target) != "stuck":
             return False  # 입력창에 안 들어감
-        # 2026-07-07 실측(Linux claude stuck 사고): CC TUI 가 Enter(C-m) submit
+        # 2026-07-07 실측(Linux stuck 사고): CC TUI 가 Enter(C-m) submit
         # 을 간헐적으로 무시하고 C-j(LF) 만 인식하는 케이스가 있다. _wait_idle
         # 에는 Enter→C-j 폴백이 있었으나 _paste_inject(실제 주입 경로)에는
         # Enter 3회만 있어 C-j 가 누락 → 텍스트 stuck → 응답 지연("한박자 늦음"
@@ -180,7 +196,7 @@ def _paste_inject(target: str, text: str) -> bool:
 
 
 def _inject_worker(tmux_target: str, text: str) -> None:
-    # 2026-07-07 실사고(Linux claude "Linux 배포? 첫 메시지 유실"): /open 직후 CC 부팅
+    # 2026-07-07 실사고(Linux 첫 메시지 유실): /open 직후 CC 부팅
     # busy 구간에 첫 텔레그램 메시지가 도착하면 _paste_inject 내부의 paste 직전
     # idle 재확인이 busy 를 잡아 return False → 그대로 워커 종료 → 메시지 유실.
     # 이후 2,3 번째 메시지는 정상 처리돼 "답 개수가 안 맞아 꼬인 것처럼" 보임.
@@ -188,7 +204,7 @@ def _inject_worker(tmux_target: str, text: str) -> None:
     # wait_idle 은 stuck(잔류텍스트) 을 Enter→C-j 로 제출해 clear 하므로, 재시도
     # 직전엔 입력창이 비어있는(idle) 상태가 보장된다 → 중복 주입 위험 없음.
     MAX_INJECT_RETRIES = 4
-    with _inject_lock:
+    with _get_pane_lock(tmux_target):
         for attempt in range(MAX_INJECT_RETRIES):
             st = _wait_idle(tmux_target, timeout=45.0)
             if st == "dead":
@@ -209,6 +225,38 @@ def _inject_worker(tmux_target: str, text: str) -> None:
 
 
 class TmuxLinuxTransport(Transport):
+    def send_key(self, target: dict, vk: int) -> InjectResult:
+        """/stop(작업 중단)용 키 전송. VK_ESCAPE → tmux send-keys C-c.
+
+        Windows(sendkeys_win)는 keybd_event ESC 로 CC TUI 작업 중단. tmux에선
+        ESC(send-keys Escape)도 CC 가 받지만, CC TUI 가 간헐적으로 C-m(Enter)
+        submit 만 인식하듯 ESC 도 무시하는 케이스가 있다(2026-07-07 stuck 사고
+        와 동일 렌더 타이밍 이슈). 작업 중단은 명백한 의도적 신호이므로 더 확실한
+        C-c(SIGINT)를 쓴다 — 주입 컨텍스트의 "C-c 금지(CC 세션 자체 종료)"와는
+        다르다: 그건 idle 보장 안 된 상태에서 잘못 보내 CC 를 죽이는 실사고였고,
+        여긴 살아있는 CC 에 중단 의도로 보내는 것이다. C-c 는 CC TUI 에서 현재
+        generation/tool 을 중단하지 세션 자체를 종료하진 않는다.
+
+        동기 호출(라우터 루프에서 /stop 은 드물고 길지 않으므로 비동기 불필요).
+        """
+        tmux_target = _resolve_target(target)
+        if not _has_session(tmux_target):
+            return InjectResult(delivered=False, method="tmux-sendkey",
+                                note="tmux session dead")
+        # VK_ESCAPE(0x1B) 만 지원(현재 /stop 유일 호출). 다른 vk 는 안전하게 거부.
+        if vk != 0x1B:
+            return InjectResult(delivered=False, method="tmux-sendkey",
+                                note=f"unsupported vk={vk:#x} (ESC only)")
+        try:
+            _run(["tmux", "send-keys", "-t", tmux_target, "C-c"])
+            _debug_log(f"[send_key] C-c → {tmux_target}")
+            return InjectResult(delivered=True, method="tmux-sendkey",
+                                note="C-c 전송")
+        except Exception as e:
+            _debug_log(f"[send_key] FAILED target={tmux_target} err={e!r}")
+            return InjectResult(delivered=False, method="tmux-sendkey",
+                                note=f"C-c 전송 실패: {e!r}")
+
     def inject(
         self,
         target: dict,
@@ -233,7 +281,7 @@ class TmuxLinuxTransport(Transport):
         # 실행하는 동안은 그 pane 의 foreground 프로세스가 일시적으로
         # bash/python3/ssh 등으로 바뀐다 — 그때마다(하루 수십~수백 회) 이
         # 체크가 "dead" 오판을 냈고, 라우터 폴링 루프(5~6s 마다 sweep_dead
-        # 호출)가 실제로 살아있는 Linux 배포 세션의 registry 슬롯을 지워버렸다
+        # 호출)가 실제로 살아있는 세션의 registry 슬롯을 지워버렸다
         # (2026-07-05 실사고: "/open 빼고 전부 안 됨" — 슬롯이 계속
         # release 되니 숫자 라우팅이 전부 "터미널 없음"으로 실패).
         # tmux 세션 존재 여부만으로는 오판할 일이 없다(진짜 kill-session
